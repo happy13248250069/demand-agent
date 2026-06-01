@@ -1,0 +1,5 @@
+{
+  "name": "Demand Sensing Agent",
+  "description": "An AI agent for demand sensing and forecast management with interactive tables.",
+  "requestFramePermissions": []
+}
