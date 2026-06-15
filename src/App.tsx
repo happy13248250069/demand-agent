@@ -159,51 +159,75 @@ const AnomalyCard = ({ text }: { text: string }) => {
 };
 
 const ExternalEventCard = () => {
+  const events = [
+    {
+      id: 1,
+      title: '小米电视宣布618大促提前启动，备货量同比增长25%',
+      tag: '促销备货',
+      content: '小米电视宣布今年618年中大促将提前至5月15日启动，涵盖55寸、65寸、75寸全系电视品类，预计面板备货量同比增长25%以上。',
+      affectedTarget: '小米/TV BU',
+      impactDirection: '正向–促销活动拉动面板采购需求',
+      impactPositive: true,
+      source: '企业公告',
+      similarity: 0.82
+    },
+    {
+      id: 2,
+      title: 'TrendForce：2026年Q2全球电视面板价格预计上涨8-12%',
+      tag: '面板涨价',
+      content: '受欧洲杯及奥运会备货需求拉动，叠加上游玻璃基板及偏光片涨价传导，Q2全球电视面板均价预计环比上涨8-12%。',
+      affectedTarget: '全客户/TV BU',
+      impactDirection: '正向–涨价预期客户提前锁单囤货',
+      impactPositive: true,
+      source: 'TrendForce研报',
+      similarity: 0.75
+    }
+  ];
+
   return (
-    <div className="w-[420px] flex flex-col mt-2 border-t border-gray-200 pt-2.5">
-      <div className="text-[13px] font-black text-gray-900 leading-none mb-1.5">
+    <div className="flex flex-col mt-3 border-t border-gray-200 pt-3">
+      <div className="text-[13px] font-black text-gray-900 leading-none mb-3">
         外部情报解读
       </div>
-      <table className="w-full text-[11px] text-left border-collapse">
-        <thead className="hidden">
-          <tr>
-            <th>字段</th>
-            <th>内容</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap w-20">事件原文</td>
-            <td className="py-1.5 text-gray-600">行业资讯：车载芯片原料硅晶圆 Q2 报价调涨 15%（2026-04-22）</td>
-          </tr>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">数据来源</td>
-            <td className="py-1.5 text-gray-600">专业机构研报</td>
-          </tr>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">AI 判定标签</td>
-            <td className="py-1.5 text-gray-600">上游供给 - 原材料涨价</td>
-          </tr>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">影响方向</td>
-            <td className="py-1.5 text-gray-600">正向（涨价预期 → 客户提前锁单、囤货）</td>
-          </tr>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">受影响对象</td>
-            <td className="py-1.5 text-gray-600">小米 / 车载 BU</td>
-          </tr>
-          <tr className="border-b border-gray-100">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">相似度</td>
-            <td className="py-1.5 text-gray-600">0.7（高相关）</td>
-          </tr>
-          <tr className="align-top">
-            <td className="py-1.5 pr-3 font-medium text-gray-700 whitespace-nowrap">异常推理</td>
-            <td className="py-1.5 text-gray-600 leading-snug">
-              当前检测到客户 6 月需求上调，变化时点与新闻紧密相邻。外部事件提供了合理解释：客户可能因担心未来价格上升而提前囤货。属于典型的涨价周期反应。
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div className="space-y-2.5">
+        {events.map((event) => (
+          <div key={event.id} className="border border-gray-100 rounded-xl p-3 bg-white">
+            <div className="flex items-start justify-between mb-2">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-[11px] font-bold text-gray-900 truncate">{event.title}</span>
+              </div>
+              <span className="shrink-0 ml-2 px-1.5 py-0.5 bg-gray-100 rounded text-[9px] text-gray-600 font-medium">
+                {event.tag}
+              </span>
+            </div>
+            <p className="text-[10px] text-gray-600 leading-relaxed mb-2">
+              原文：{event.content}
+            </p>
+            <div className="space-y-1">
+              <div className="text-[10px] text-gray-600">
+                <span className="font-medium text-gray-700">受影响对象：</span>{event.affectedTarget}
+              </div>
+              <div className="text-[10px] text-gray-600">
+                <span className="font-medium text-gray-700">影响方向：</span>
+                <span className={event.impactPositive ? 'text-teal-600 font-medium' : 'text-red-500 font-medium'}>
+                  {event.impactDirection}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-[9px] text-gray-400">
+                相似度 {event.similarity}（{event.similarity >= 0.7 ? '高相关' : '中相关'}）
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold text-white ${event.impactPositive ? 'bg-teal-500' : 'bg-red-400'}`}>
+                  {event.id}
+                </span>
+                <span className="text-[9px] text-gray-500">来源:{event.source}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
