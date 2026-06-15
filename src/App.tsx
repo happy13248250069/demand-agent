@@ -1349,48 +1349,50 @@ const EditableCell = ({
       {showPopup && hasAnomalyPopup && !specialRuleData && !isAIPrediction && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white rounded-2xl shadow-[0_10px_60px_-10px_rgba(0,0,0,0.4)] z-[10000] text-left border border-gray-200 cursor-default w-[460px]"
+          className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/20"
         >
-          <div className="flex items-center justify-between px-5 pt-4 pb-2 border-b border-gray-100">
-            <span className="text-[14px] font-black text-gray-900">AI异常归因</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
-              className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
-            >
-              <X size={14} className="text-gray-500" />
-            </button>
-          </div>
-          <div className="p-5 max-h-[70vh] overflow-y-auto space-y-4">
-            {/* 异常推理 (DeepSeek) */}
-            <div>
-              <div className="text-[12px] font-bold text-gray-800 mb-1.5">异常推理</div>
-              {isLoadingLlm ? (
-                <div className="flex items-center gap-2 text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  <Loader2 size={12} className="animate-spin" />
-                  AI正在分析异常原因...
-                </div>
-              ) : (
-                <ul className="text-[11px] text-gray-600 leading-relaxed bg-gray-50 rounded-lg p-2.5 border border-gray-100 space-y-1.5 list-none">
-                  {llmReasoning.split('\n').filter(l => l.trim()).map((line, i) => (
-                    <li key={i} className="flex items-start gap-1.5">
-                      <span className="text-blue-500 shrink-0 mt-0.5">•</span>
-                      <span>{line.replace(/^[•·\-]\s*/, '')}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+          <div className="bg-white rounded-2xl shadow-[0_20px_80px_-10px_rgba(0,0,0,0.5)] border border-gray-200 w-[620px] max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-gray-100 shrink-0">
+              <span className="text-[16px] font-black text-gray-900">AI异常归因</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <X size={16} className="text-gray-500" />
+              </button>
             </div>
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* 异常推理 (DeepSeek) */}
+              <div>
+                <div className="text-[14px] font-bold text-gray-800 mb-2">异常推理</div>
+                {isLoadingLlm ? (
+                  <div className="flex items-center gap-2 text-[13px] text-gray-500 bg-gray-50 rounded-lg p-4 border border-gray-100">
+                    <Loader2 size={14} className="animate-spin" />
+                    AI正在分析异常原因...
+                  </div>
+                ) : (
+                  <ul className="text-[13px] text-gray-700 leading-relaxed bg-gray-50 rounded-lg p-4 border border-gray-100 space-y-2.5 list-none">
+                    {llmReasoning.split('\n').filter(l => l.trim()).map((line, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-blue-500 shrink-0 mt-0.5 text-[14px]">•</span>
+                        <span>{line.replace(/^[•·\-]\s*/, '')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
 
-            {/* 规则分析 + 外部情报 */}
-            <CellTooltipContent
-              reason={reason}
-              tag={tag}
-              aiSummary={aiSummary}
-              violatedRules={violatedRules}
-              oldValue={oldValue}
-              newValue={value}
-              isModified={isModified}
-            />
+              {/* 规则分析 + 外部情报 */}
+              <CellTooltipContent
+                reason={reason}
+                tag={tag}
+                aiSummary={aiSummary}
+                violatedRules={violatedRules}
+                oldValue={oldValue}
+                newValue={value}
+                isModified={isModified}
+              />
+            </div>
           </div>
         </div>
       )}
