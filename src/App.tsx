@@ -118,35 +118,35 @@ const AnomalyCard = ({ text }: { text: string }) => {
   if (currentRule) rules.push(currentRule);
 
   return (
-    <div className="w-full flex flex-col gap-2">
-      <div className="text-[13px] font-black text-gray-900 leading-none">
+    <div className="w-full flex flex-col gap-3">
+      <div className="text-[14px] font-black text-gray-900 leading-none">
         规则分析
       </div>
-      
-      <div className="flex flex-col gap-1.5">
+
+      <div className="flex flex-col gap-2">
         {rules.map((r, idx) => (
-          <div key={idx} className="bg-slate-50 border border-slate-100 rounded-lg p-2.5 flex flex-col gap-1">
-            <div className="font-bold text-gray-900 text-[12px] flex items-center justify-between">
+          <div key={idx} className="bg-slate-50 border border-slate-100 rounded-lg p-4 flex flex-col gap-1.5">
+            <div className="font-bold text-gray-900 text-[13px] flex items-center justify-between">
               <span>{r.title}</span>
               {r.isViolation && (
-                <span className="text-[10px] text-red-500 font-bold bg-red-50 px-1.5 py-0.5 rounded leading-none">
+                <span className="text-[11px] text-red-500 font-bold bg-red-50 px-2 py-0.5 rounded leading-none">
                   违反规则
                 </span>
               )}
             </div>
-            <div className="flex flex-col gap-0.5">
+            <div className="flex flex-col gap-1">
               {r.desc && (
-                <div className="text-[11px] text-gray-600 leading-snug">
+                <div className="text-[13px] text-gray-600 leading-snug">
                   <span className="font-medium text-gray-700">描述: </span>{r.desc}
                 </div>
               )}
               {r.situation && (
-                <div className="text-[11px] text-gray-600 leading-snug mt-0.5">
+                <div className="text-[13px] text-gray-600 leading-snug">
                   <span className="font-medium text-gray-700">情况: </span>{r.situation}
                 </div>
               )}
               {r.conclusion && (
-                <div className="text-[11px] text-gray-600 leading-snug mt-0.5">
+                <div className="text-[13px] text-gray-600 leading-snug">
                   <span className="font-medium text-gray-700">结论: </span>{r.conclusion}
                 </div>
               )}
@@ -185,44 +185,42 @@ const ExternalEventCard = () => {
   ];
 
   return (
-    <div className="flex flex-col mt-3 border-t border-gray-200 pt-3">
-      <div className="text-[13px] font-black text-gray-900 leading-none mb-3">
+    <div className="flex flex-col mt-4 border-t border-gray-200 pt-4">
+      <div className="text-[14px] font-black text-gray-900 leading-none mb-3">
         外部情报解读
       </div>
-      <div className="space-y-2.5">
+      <div className="space-y-3">
         {events.map((event) => (
-          <div key={event.id} className="border border-gray-100 rounded-xl p-3 bg-white">
+          <div key={event.id} className="border border-gray-100 rounded-lg p-4 bg-slate-50">
             <div className="flex items-start justify-between mb-2">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <span className="text-[11px] font-bold text-gray-900 truncate">{event.title}</span>
-              </div>
-              <span className="shrink-0 ml-2 px-1.5 py-0.5 bg-gray-100 rounded text-[9px] text-gray-600 font-medium">
+              <span className="text-[13px] font-bold text-gray-900 flex-1 min-w-0">{event.title}</span>
+              <span className="shrink-0 ml-3 px-2 py-0.5 bg-gray-200 rounded text-[11px] text-gray-700 font-medium">
                 {event.tag}
               </span>
             </div>
-            <p className="text-[10px] text-gray-600 leading-relaxed mb-2">
+            <p className="text-[13px] text-gray-600 leading-relaxed mb-2.5">
               原文：{event.content}
             </p>
-            <div className="space-y-1">
-              <div className="text-[10px] text-gray-600">
+            <div className="space-y-1.5">
+              <div className="text-[13px] text-gray-600">
                 <span className="font-medium text-gray-700">受影响对象：</span>{event.affectedTarget}
               </div>
-              <div className="text-[10px] text-gray-600">
+              <div className="text-[13px] text-gray-600">
                 <span className="font-medium text-gray-700">影响方向：</span>
                 <span className={event.impactPositive ? 'text-teal-600 font-medium' : 'text-red-500 font-medium'}>
                   {event.impactDirection}
                 </span>
               </div>
             </div>
-            <div className="flex items-center justify-between mt-2">
-              <span className="text-[9px] text-gray-400">
+            <div className="flex items-center justify-between mt-3 pt-2 border-t border-gray-100">
+              <span className="text-[11px] text-gray-400">
                 相似度 {event.similarity}（{event.similarity >= 0.7 ? '高相关' : '中相关'}）
               </span>
               <div className="flex items-center gap-1.5">
-                <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold text-white ${event.impactPositive ? 'bg-teal-500' : 'bg-red-400'}`}>
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${event.impactPositive ? 'bg-teal-500' : 'bg-red-400'}`}>
                   {event.id}
                 </span>
-                <span className="text-[9px] text-gray-500">来源:{event.source}</span>
+                <span className="text-[11px] text-gray-500">来源:{event.source}</span>
               </div>
             </div>
           </div>
