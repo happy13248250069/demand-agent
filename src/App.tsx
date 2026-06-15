@@ -685,12 +685,12 @@ const AGGREGATES = ['Q1', 'Q2', 'Q3', 'Q4', 'H1', 'H2', '全年'];
 
 const generateInitialData = (): ForecastRow[] => {
   const customers = [
-    { name: '小米', sizes: ['55寸', '35寸', '43寸', '65寸'] },
-    { name: '华为', sizes: ['55寸', '65寸', '75寸'] },
-    { name: 'OPPO', sizes: ['65寸', '55寸'] },
-    { name: 'VIVO', sizes: ['50寸', '43寸'] },
-    { name: '三星', sizes: ['55寸', '65寸', '75寸', '85寸'] },
-    { name: '索尼', sizes: ['55寸', '65寸'] },
+    { name: '小米', sizes: ['55寸', '65寸', '75寸'] },
+    { name: '三星电子', sizes: ['55寸', '65寸', '75寸', '85寸'] },
+    { name: 'LG电子', sizes: ['55寸', '65寸', '75寸'] },
+    { name: '海信', sizes: ['55寸', '65寸', '75寸', '85寸'] },
+    { name: '索尼', sizes: ['55寸', '65寸', '75寸'] },
+    { name: 'TCL电子', sizes: ['55寸', '65寸', '75寸', '85寸'] },
   ];
 
   const rows: ForecastRow[] = [];
@@ -742,78 +742,92 @@ const generateInitialData = (): ForecastRow[] => {
         MONTHS.forEach((m) => {
           m.weeks.forEach((w) => {
             const key = `${m.name}-${w}`;
-            const baseValue = c.name === '华为' ? 300 : 100;
+            const baseValue = c.name === '三星电子' ? 400 : c.name === 'LG电子' ? 350 : c.name === '海信' ? 300 : c.name === 'TCL电子' ? 300 : 200;
             let val = baseValue;
             let prevVal = baseValue;
-            
+
             const isWK2 = w === 'WK2\n260101-03';
             const isWK3 = w === 'WK3\n260104-10';
             const isWK4 = w === 'WK4\n260111-17';
-            
-            if ((item as string) === 'ExtraSales') {
-              val = isWK3 ? 50 : 0;
-              if (isWK2 && c.name === '小米' && s === '55寸') {
-                val = 20;
-                prevVal = 0;
-                tags[key] = "提前备货";
-                reasons[key] = "部分型号由于物流周期拉长，要求提前备货";
-              }
-              if (val > 0 && !isWK2) reasons[key] = "汇总预设需求";
-            } else if (item === '销售FCST (ETD)' && isWK3 && c.name === '华为') {
-              val = 200;
-              reasons[key] = "汇总调整";
-            } else if (isWK3) {
-              val = baseValue + 50;
-              if (c.name === '小米' && s === '55寸') val = 150;
-              if (c.name === '小米' && s === '35寸') val = 150;
-              if (item === '需求计划' || item === 'ExtraUnmet') val = 100;
-              if (item === 'ExtraUnmet' && isWK3) val = 50;
-              if (c.name === '三星' && isWK3) {
-                if (item === '销售FCST (ETD)' || item === '需求计划') val = 200;
-                if ((item as string) === 'ExtraSales' || item === 'ExtraUnmet') val = 100;
-              }
+            const isWK5 = w === 'WK5\n260118-24';
 
-              // Add some changes for FCST change identification
-              if (item === '客户FCST') {
-                if (c.name === '华为') prevVal = val - 20;
-                if (c.name === '小米') {
-                  if (s === '55寸') prevVal = 150; // diff +30
-                  else if (s === '35寸') prevVal = 100; // diff +50
-                  else prevVal = val + 30;
-                }
-                
-                if (c.name === '小米') {
-                  if (s === '55寸') {
-                    aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：锁定期（Week 20-22）内 FCST 与上一版本相比，任何变化均视为异常。\n* 本次情况：上一版本 10,000 件 → 本周版本 12,000 件，变动 +20%。\n* 结论：违反规则。客户在锁定期内大幅上调需求。\n② 供需缺口规则\n* 规则描述：销售 FCST 超出供应能力的幅度不得超过 10%。\n* 本次情况：本周客户 FCST 12,000 件，供应上限 10,000 件，超出 20%。\n* 结论：违反规则。当前产能无法满足客户申报量。";
-                    // Clear out default violation array since our new string includes it
-                  } else {
-                    aiSummaries[key] = "1.客户C001在2025年第10周FCST突增50%（从800台到1200台），可能与同期TrendForce发布的“面板涨价”新闻相关。该新闻指出Q2面板价格预计上涨10%，客户可能提前备货。1️⃣（来源：外部研报）\n2. 该客户近期有新品促销活动（内部事件），促销时间为3月15日-4月15日，覆盖55寸TV，可能拉动需求。2️⃣（来源：新闻）";
-                    violatedRules[key] = [
-                      "规则1：锁定期内fcst+100（+30%）。",
-                      "规则2：EOP状态，ModelA的EOP时间：2026-01-23",
-                      "规则3：供应100，超供应50（+50%）"
-                    ];
-                  }
-                }
-              }
-            } else if (isWK4) {
-              if (c.name === '小米') {
-                if (s === '55寸') { val = 90; prevVal = 100; } // diff -10
-                else if (s === '35寸') { val = 100; prevVal = 90; } // diff +10
-              }
+            if ((item as string) === 'ExtraSales') {
+              val = isWK3 ? Math.floor(baseValue * 0.2) : 0;
+            } else if (isWK3) {
+              val = baseValue + Math.floor(baseValue * 0.25);
+              if (item === '需求计划') val = Math.floor(baseValue * 0.8);
+              if (item === 'ExtraUnmet') val = Math.floor(baseValue * 0.15);
             } else if (m.name === 'M2604' || m.name === 'M2605' || m.name === 'M2606') {
               val = baseValue * 4;
               prevVal = val;
             }
-            
+
+            // === 小米 55寸 WK3: 规则1(锁定期FCST变化) + 规则3(供需缺口) ===
+            if (c.name === '小米' && item === '客户FCST' && s === '55寸' && isWK3) {
+              val = 800; prevVal = 500;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：锁定期（Week 2-4）内 FCST 与上一版本相比，任何变化均视为异常。\n* 本次情况：上一版本 500 件 → 本周版本 800 件，变动 +60%。\n* 结论：违反规则。客户在锁定期内大幅上调需求，可能与618备货相关。\n② 供需缺口规则\n* 规则描述：客户FCST超出供应能力的幅度不得超过10%。\n* 本次情况：本周客户 FCST 800 件，供应上限 600 件，超出 33%。\n* 结论：违反规则。当前产能无法满足客户申报量。";
+              violatedRules[key] = [
+                "规则1：锁定期内FCST+300（+60%），远超阈值。",
+                "规则3：供应上限600，客户需求800，超出33%。"
+              ];
+            }
+
+            // === 三星电子 65寸 WK4: 规则2(产品生命周期EOP) ===
+            if (c.name === '三星电子' && item === '客户FCST' && s === '65寸' && isWK4) {
+              val = 250; prevVal = 250;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 产品生命周期校验\n* 规则描述：处于EOP（停产）阶段的产品，不应有新增FCST。\n* 本次情况：三星电子 65寸 Model B V1.1 已于 2026-01-15 进入EOP状态，但本周仍申报 250 件。\n* 结论：违反规则。需与客户确认是否为遗留订单或系统未同步。";
+              violatedRules[key] = [
+                "规则2：产品已EOP（2026-01-15），不应有FCST=250。"
+              ];
+            }
+
+            // === 海信 75寸 WK3: 规则1(FCST骤降) + 规则4(目标达成不足) ===
+            if (c.name === '海信' && item === '客户FCST' && s === '75寸' && isWK3) {
+              val = 120; prevVal = 380;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：月度FCST变化超过5%视为异常。\n* 本次情况：上一版本 380 件 → 本周版本 120 件，变动 -68%。\n* 结论：违反规则。客户大幅下调需求，影响产能利用率。\n② 销售目标达成\n* 规则描述：累积销售+未来预测/年度目标<90%为异常。\n* 本次情况：75寸年度目标达成率仅65%，缺口35%。\n* 结论：违反规则。年度目标达成严重滞后。";
+              violatedRules[key] = [
+                "规则1：FCST月度变化-68%，远超5%阈值。",
+                "规则4：年度目标达成率65%，低于90%预警线。"
+              ];
+            }
+
+            // === LG电子 75寸 WK5: 规则5(销售FCST vs 客户FCST) + 规则3(供需缺口) ===
+            if (c.name === 'LG电子' && item === '客户FCST' && s === '75寸' && isWK5) {
+              val = 600; prevVal = 580;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发2 条规则\n① 销售FCST与客户FCST偏差\n* 规则描述：销售FCST与客户FCST偏差超过10%视为异常。\n* 本次情况：客户FCST 600件，销售FCST 350件，偏差-42%。\n* 结论：违反规则。销售预测大幅低于客户申报，存在沟通断层。\n② 供需缺口规则\n* 规则描述：需求超出供应能力10%以上为异常。\n* 本次情况：客户FCST 600件，供应计划400件，超出50%。\n* 结论：违反规则。需紧急协调产能或与客户沟通调整。";
+              violatedRules[key] = [
+                "规则5：销售FCST 350 vs 客户FCST 600，偏差-42%。",
+                "规则3：供应计划400，客户需求600，超出50%。"
+              ];
+            }
+
+            // === 索尼 65寸 WK4: 规则6(历史趋势偏离) — 地震导致需求骤降 ===
+            if (c.name === '索尼' && item === '客户FCST' && s === '65寸' && isWK4) {
+              val = 80; prevVal = 250;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 历史趋势偏离\n* 规则描述：当前FCST与去年同期对比偏离超过30%视为异常。\n* 本次情况：去年同期 240 件，本周仅 80 件，偏离 -67%。\n* 结论：违反规则。远低于历史同期水平，可能受日本能登半岛地震导致索尼工厂停产影响。";
+              violatedRules[key] = [
+                "规则6：历史同期240，当前80，偏离-67%，远超30%阈值。"
+              ];
+            }
+
+            // === TCL电子 85寸 WK3: 规则7(重点产品达成) + 规则1(FCST突增) ===
+            if (c.name === 'TCL电子' && item === '客户FCST' && s === '85寸' && isWK3) {
+              val = 550; prevVal = 300;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：锁定期内FCST变化视为异常。\n* 本次情况：上一版本 300 件 → 本周版本 550 件，变动 +83%。\n* 结论：违反规则。客户大幅上调85寸需求。\n② 重点产品达成分析\n* 规则描述：KPI产品(cumulative+future)/年度目标<90%为异常。\n* 本次情况：85寸为公司重点战略产品，当前达成率仅72%。\n* 结论：违反规则。需加大85寸推广力度。";
+              violatedRules[key] = [
+                "规则1：锁定期内FCST+250（+83%），远超阈值。",
+                "规则7：重点产品85寸达成率72%，低于90%目标。"
+              ];
+            }
+
             values[key] = val;
             prevValues[key] = prevVal;
-            if (item === '销售FCST (ETD)' && val < baseValue * 0.8) isAnomaly[key] = true;
-            
-            // Explicitly mark requested anomalies
-            if (c.name === '小米' && s === '55寸' && item === '客户FCST' && isWK3) {
-              isAnomaly[key] = true;
-            }
           });
         });
 
@@ -1693,7 +1707,7 @@ const ForecastChangeTable = ({
             <AlertCircle size={16} /> 本周客户FCST及其变化
           </h3>
           <p className="text-xs text-gray-600 mt-1">
-            ● 触发原因：基于“客户FCST变换识别”规则，锁定期为3周，锁定期内任何变更即异常，锁定期外周度变化阈值15%、月度阈值5%、季度阈值10%。超出上述条件即判定为异常。<br/>
+            ● 触发原因：基于"客户FCST变换识别"规则，锁定期为3周，锁定期内任何变更即异常，锁定期外周度变化阈值15%、月度阈值5%、季度阈值10%。超出上述条件即判定为异常。<br/>
             {groupingType === 'tech' ? (
               <>
                 ● 变化幅度：LTPS的预测总量增加30kpcs，VA减少20kpcs，变化集中在ModelAV1.1（+20）、Model BV1.1（-30）。<br/>
@@ -5123,7 +5137,7 @@ export default function App() {
         const agentMsg: Message = { 
           id: (Date.now() + 1).toString(), 
           role: 'agent', 
-          content: `为您查询到“客户FCST变化识别”规则的详细解释及历史分析如下：\n\n规则解释：此规则用于检测各版本预测偏离均值的程度，超过15%视为异常，可能影响生产计划准确性。通过监控客户预测的波动，提前识别潜在的供需风险。\n\n效果评估：准确率:80%。基于历史数据分析，在触发该规则的120次异常中，有96次用户随后手工修改了预测数值（视为真实异常），准确率表现良好。\n\n优化建议：该规则近3个月触发120次，其中80%为真实异常，建议保持当前阈值；但小米产品线误报较多，建议针对该客户单独调整阈值至20%以减少干扰。`, 
+          content: `为您查询到"客户FCST变化识别"规则的详细解释及历史分析如下：\n\n规则解释：此规则用于检测各版本预测偏离均值的程度，超过15%视为异常，可能影响生产计划准确性。通过监控客户预测的波动，提前识别潜在的供需风险。\n\n效果评估：准确率:80%。基于历史数据分析，在触发该规则的120次异常中，有96次用户随后手工修改了预测数值（视为真实异常），准确率表现良好。\n\n优化建议：该规则近3个月触发120次，其中80%为真实异常，建议保持当前阈值；但小米产品线误报较多，建议针对该客户单独调整阈值至20%以减少干扰。`, 
           type: 'rule-explanation',
           data: data
         };
@@ -5153,7 +5167,7 @@ export default function App() {
           const agentMsg: Message = {
             id: (Date.now() + 1).toString(),
             role: 'agent',
-            content: '好的，为您查询到MNT BU本周销售预测数据如下。您可以点击”尺寸-分辨率”旁的箭头展开查看刷新率维度，再次点击可展开至具体 ProductID 维度数据。',
+            content: '好的，为您查询到MNT BU本周销售预测数据如下。您可以点击"尺寸-分辨率"旁的箭头展开查看刷新率维度，再次点击可展开至具体 ProductID 维度数据。',
             type: 'mnt-table',
             data: mntData
           };
@@ -5164,7 +5178,7 @@ export default function App() {
           const agentMsg: Message = {
             id: (Date.now() + 1).toString(),
             role: 'agent',
-            content: '好的，为您查询到本周客户预测数据如下。您可以点击”尺寸”单元格旁的箭头展开查看具体的 Model 维度数据。',
+            content: '好的，为您查询到本周客户预测数据如下。您可以点击"尺寸"单元格旁的箭头展开查看具体的 Model 维度数据。',
             type: 'table',
             data: initialData
           };
@@ -5176,7 +5190,7 @@ export default function App() {
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
-          content: '好的，为您查询到本周客户预测数据如下。您可以点击”尺寸”单元格旁的箭头展开查看具体的 Model 维度数据。',
+          content: '好的，为您查询到本周客户预测数据如下。您可以点击"尺寸"单元格旁的箭头展开查看具体的 Model 维度数据。',
           type: 'table',
           data: initialData
         };
