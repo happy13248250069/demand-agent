@@ -1365,9 +1365,14 @@ const EditableCell = ({
                   AI正在分析异常原因...
                 </div>
               ) : (
-                <p className="text-[11px] text-gray-600 leading-relaxed bg-gray-50 rounded-lg p-2.5 border border-gray-100">
-                  {llmReasoning}
-                </p>
+                <ul className="text-[11px] text-gray-600 leading-relaxed bg-gray-50 rounded-lg p-2.5 border border-gray-100 space-y-1.5 list-none">
+                  {llmReasoning.split('\n').filter(l => l.trim()).map((line, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <span className="text-blue-500 shrink-0 mt-0.5">•</span>
+                      <span>{line.replace(/^[•·\-]\s*/, '')}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
