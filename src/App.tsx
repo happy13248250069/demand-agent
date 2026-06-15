@@ -1231,14 +1231,19 @@ const EditableCell = ({
   useEffect(() => {
     if (showPopup && hasAnomalyPopup && !llmReasoning && !isLoadingLlm) {
       setIsLoadingLlm(true);
+      const externalInfos = [
+        { title: '小米电视宣布618大促提前启动，备货量同比增长25%', content: '小米电视宣布今年618年中大促将提前至5月15日启动，涵盖55寸、65寸、75寸全系电视品类，预计面板备货量同比增长25%以上。', source: '企业公告' },
+        { title: 'TrendForce：2026年Q2全球电视面板价格预计上涨8-12%', content: '受欧洲杯及奥运会备货需求拉动，叠加上游玻璃基板及偏光片涨价传导，Q2全球电视面板均价预计环比上涨8-12%。', source: 'TrendForce研报' },
+      ];
       generateAnomalyReasoning(
-        '客户',
-        '',
-        '',
+        startRowId?.split('-')[0] || '客户',
+        startRowId?.split('-')[1] || '',
+        startColumnKey?.split('-')[0] || '',
         value,
         oldValue || value,
         violatedRules || [],
-        aiSummary || ''
+        aiSummary || '',
+        externalInfos
       ).then(text => {
         setLlmReasoning(text);
         setIsLoadingLlm(false);
