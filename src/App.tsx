@@ -118,7 +118,7 @@ const AnomalyCard = ({ text }: { text: string }) => {
   if (currentRule) rules.push(currentRule);
 
   return (
-    <div className="w-[420px] flex flex-col gap-2">
+    <div className="w-full flex flex-col gap-2">
       <div className="text-[13px] font-black text-gray-900 leading-none">
         规则分析
       </div>
@@ -250,7 +250,7 @@ const CellTooltipContent = ({
   isModified?: boolean;
 }) => {
   return (
-    <div className="w-[420px] flex flex-col gap-0">
+    <div className="w-full flex flex-col gap-0">
       {/* User Edit Part */}
       {isModified && (
         <div className={`flex flex-col gap-1.5 ${aiSummary || (violatedRules && violatedRules.length > 0) ? 'pb-2 border-b border-gray-100 mb-2' : ''}`}>
