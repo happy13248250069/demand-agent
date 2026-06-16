@@ -2479,8 +2479,7 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                                   startRowId={rowData.id}
                                   startColumnKey={key}
                                   isAnomaly={rowData.isAnomaly[key]}
-                                  isAIPrediction={rowData.isAIPrediction?.[key]}
-                                  aiPredictionSimple={true}
+                                  isAIPrediction={false}
                                   specialRuleData={rowData.specialRuleData?.[key]}
                                   allowModificationMarker={rowData.item === '销售FCST (ETD)' || rowData.item === 'ExtraSales'}
                                 />
@@ -4621,7 +4620,7 @@ const ForecastTable = ({
                             tag={row.tags[key]}
                             aiSummary={row.aiSummaries?.[key]}
                             violatedRules={row.violatedRules?.[key]}
-                            isAIPrediction={row.item === 'AI预测'}
+                            isAIPrediction={false}
                             onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
                             oldValue={row.prevValues?.[key]}
                           />
@@ -4712,7 +4711,7 @@ const ForecastTable = ({
                                 tag={row.tags[key]}
                                 aiSummary={row.aiSummaries?.[key]}
                                 violatedRules={row.violatedRules?.[key]}
-                                isAIPrediction={row.item === 'AI预测'}
+                                isAIPrediction={false}
                                 onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
                                 startRowId={row.id}
                                 startColumnKey={key}
