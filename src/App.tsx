@@ -2491,13 +2491,15 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                       const cellAiSummary = rowData.aiSummaries?.[key];
                       const cellViolatedRules = rowData.violatedRules?.[key];
                       const hasAnomalyContent = !!(cellAiSummary && cellAiSummary.startsWith('异常分析:\n'));
+                      const cellIsAIPrediction = !!rowData.isAIPrediction?.[key];
                       return (
                         <td key={key} className="border border-gray-200 p-0 h-9">
-                          {cellIsAnomaly && hasAnomalyContent ? (
+                          {(cellIsAnomaly && hasAnomalyContent) || cellIsAIPrediction ? (
                             <EditableCell
                               value={rowData.values[key] || 0}
                               isEditable={false}
-                              isAnomaly={true}
+                              isAnomaly={cellIsAnomaly}
+                              isAIPrediction={cellIsAIPrediction}
                               aiSummary={cellAiSummary}
                               violatedRules={cellViolatedRules}
                               onSave={() => {}}
@@ -2510,11 +2512,6 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                               cellIsAnomaly ? 'bg-red-100 text-red-600 font-bold' : 'bg-gray-50/50 text-gray-500'
                             }`}>
                               {(rowData.values[key] || 0).toLocaleString()}
-                              {rowData.isAIPrediction?.[key] && (
-                                <div className="absolute top-0.5 right-0.5">
-                                  <Bot size={8} className="text-blue-500" />
-                                </div>
-                              )}
                             </div>
                           )}
                         </td>
