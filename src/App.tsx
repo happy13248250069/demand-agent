@@ -814,6 +814,48 @@ const generateInitialData = (): ForecastRow[] => {
               ];
             }
 
+            // ========== 销售FCST异常数据（小米）==========
+
+            // 规则5: 销售FCST变化识别 — 55寸WK4 锁定期内销售FCST大幅上调+75%
+            if (c.name === '小米' && item === '销售FCST (ETD)' && s === '55寸' && isWK4) {
+              val = 350; prevVal = 200;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售FCST变化识别\n* 规则描述：最新版本销售FCST与上一版本相比，月度变化超过20%视为异常。\n* 本次情况：上一版本 200 件 -> 本周版本 350 件，变动 +75%。\n* 结论：违反规则。销售在锁定期内大幅上调预测，需确认是否有客户紧急加单依据。";
+              violatedRules[key] = ["规则5：销售FCST月度变化+75%，远超20%阈值。"];
+            }
+
+            // 规则6: 销售FCST vs 客户FCST — 65寸WK3 偏差-62%
+            if (c.name === '小米' && item === '销售FCST (ETD)' && s === '65寸' && isWK3) {
+              val = 100; prevVal = 100;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售FCST vs 客户FCST\n* 规则描述：销售FCST与客户FCST偏差超过10%视为异常。\n* 本次情况：客户FCST 260件，销售FCST 100件，偏差 -62%。\n* 结论：违反规则。销售预测大幅低于客户申报，销售可能对客户需求持保守态度或未及时同步客户最新需求。";
+              violatedRules[key] = ["规则6：销售FCST 100 vs 客户FCST 260，偏差-62%。"];
+            }
+
+            // 规则4: 销售目标达成对比 — 75寸WK4 达成率仅40%
+            if (c.name === '小米' && item === '销售FCST (ETD)' && s === '75寸' && isWK4) {
+              val = 60; prevVal = 60;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售目标达成对比\n* 规则描述：销售FCST累积量 vs BP/RP目标，差距超过20%视为异常。\n* 本次情况：75寸Q2 BP目标 1200件，当前销售FCST累积仅 480件，达成率40%。\n* 结论：违反规则。销售预测远低于经营目标，75寸存在严重欠量风险。";
+              violatedRules[key] = ["规则4：销售FCST累积480 vs BP目标1200，达成率40%。"];
+            }
+
+            // 规则8: 历史同期趋势偏差 — 55寸WK5 远超去年同期+91%
+            if (c.name === '小米' && item === '销售FCST (ETD)' && s === '55寸' && isWK5) {
+              val = 420; prevVal = 400;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 历史同期趋势偏差\n* 规则描述：销售FCST与去年同期实际出货对比，偏离超过30%视为异常。\n* 本次情况：去年同期实际出货 220 件，本周销售FCST 420 件，偏离 +91%。\n* 结论：违反规则。销售预测远超历史同期水平，需确认是否有618备货等合理支撑。";
+              violatedRules[key] = ["规则8：去年同期出货220，当前销售FCST 420，偏离+91%。"];
+            }
+
+            // 规则9: 重点产品达成分析 — 75寸WK5 KPI产品预测不足
+            if (c.name === '小米' && item === '销售FCST (ETD)' && s === '75寸' && isWK5) {
+              val = 80; prevVal = 80;
+              isAnomaly[key] = true;
+              aiSummaries[key] = "异常分析:\n触发1 条规则\n① 重点产品达成分析\n* 规则描述：KPI重点产品累积销售FCST+未来预测/年度目标<90%为异常。\n* 本次情况：小米75寸为华星重点产品，销售FCST累积达成率仅52%，距年度目标缺口48%。\n* 结论：违反规则。销售预测严重不足，需与销售团队沟通是否低估了市场需求。";
+              violatedRules[key] = ["规则9：重点产品75寸销售FCST达成率52%，低于90%。"];
+            }
+
             values[key] = val;
             prevValues[key] = prevVal;
           });
@@ -908,6 +950,39 @@ const generateInitialData = (): ForecastRow[] => {
                 }
               }
 
+              // Model行 销售FCST异常 - 小米
+              if (c.name === '小米' && item === '销售FCST (ETD)') {
+                if (s === '55寸' && isWK4) {
+                  val = Math.floor(350 / 3); prevVal = Math.floor(200 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售FCST变化识别\n* 规则描述：月度变化超过20%视为异常。\n* 本次情况：变动 +75%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则5：销售FCST变化+75%。"];
+                }
+                if (s === '65寸' && isWK3) {
+                  val = Math.floor(100 / 3); prevVal = Math.floor(100 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售FCST vs 客户FCST\n* 规则描述：偏差超过10%视为异常。\n* 本次情况：偏差-62%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则6：偏差-62%。"];
+                }
+                if (s === '75寸' && isWK4) {
+                  val = Math.floor(60 / 3); prevVal = Math.floor(60 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售目标达成对比\n* 规则描述：差距超过20%视为异常。\n* 本次情况：达成率40%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则4：达成率40%。"];
+                }
+                if (s === '55寸' && isWK5) {
+                  val = Math.floor(420 / 3); prevVal = Math.floor(400 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 历史同期趋势偏差\n* 规则描述：偏离超过30%视为异常。\n* 本次情况：偏离+91%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则8：偏离+91%。"];
+                }
+                if (s === '75寸' && isWK5) {
+                  val = Math.floor(80 / 3); prevVal = Math.floor(80 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 重点产品达成分析\n* 规则描述：达成率<90%为异常。\n* 本次情况：达成率52%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则9：达成率52%。"];
+                }
+              }
 
               values[key] = val;
               prevValues[key] = prevVal;
