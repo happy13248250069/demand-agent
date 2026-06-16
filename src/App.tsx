@@ -398,7 +398,7 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'mnt-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select';
+  type: 'text' | 'table' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'mnt-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'retrospective';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
 }
@@ -5047,6 +5047,127 @@ const DataItemSelectCard = ({ onSelect }: { onSelect: (items: string[]) => void 
   );
 };
 
+const RetrospectiveReport = () => {
+  const detailData = [
+    { customer: '三星电子', model: 'MDL-A7200', dp: '32万台', ai: '28万台', actual: '18万台', salesDeviation: '+77.8%', salesAccuracy: '42%', sales3m: '38%', aiDeviation: '+55.6%', aiAccuracy: '44%', ai3m: '40%', fva: '调整无效', category: '需人工介入' },
+    { customer: '小米', model: 'MDL-C5500', dp: '8万台', ai: '10万台', actual: '14万台', salesDeviation: '-42.9%', salesAccuracy: '57%', sales3m: '52%', aiDeviation: '-28.6%', aiAccuracy: '71%', ai3m: '65%', fva: '调整无效', category: '需人工介入' },
+    { customer: 'LG电子', model: 'MDL-B3100', dp: '18万台', ai: '15万台', actual: '12万台', salesDeviation: '+50.0%', salesAccuracy: '55%', sales3m: '50%', aiDeviation: '+25.0%', aiAccuracy: '75%', ai3m: '70%', fva: '调整无效', category: 'ML自动' },
+    { customer: '海信', model: 'MDL-D8800', dp: '6万台', ai: '7万台', actual: '9万台', salesDeviation: '-33.3%', salesAccuracy: '65%', sales3m: '60%', aiDeviation: '-22.2%', aiAccuracy: '78%', ai3m: '72%', fva: '调整无效', category: 'ML自动' },
+    { customer: 'TCL电子', model: 'MDL-E1200', dp: '5万台', ai: '4万台', actual: '3.5万台', salesDeviation: '+42.9%', salesAccuracy: '60%', sales3m: '55%', aiDeviation: '+14.3%', aiAccuracy: '86%', ai3m: '80%', fva: '调整有效', category: 'ML自动' },
+  ];
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* Header */}
+      <div className="text-center py-5 border-b-2 border-blue-600">
+        <h2 className="text-[18px] font-bold text-blue-600">销售预测准确率 & 偏差复盘报告</h2>
+        <p className="text-[12px] text-gray-500 mt-1">复盘周期：P260607-14</p>
+      </div>
+
+      <div className="p-5 space-y-6">
+        {/* 摘要 */}
+        <div>
+          <div className="text-[14px] font-bold text-blue-600 mb-2 pl-3 border-l-4 border-blue-600">摘要</div>
+          <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-[13px] text-gray-600 italic">
+            （由LLM根据下方数据自动生成摘要）
+          </div>
+        </div>
+
+        {/* 整体预测表现 */}
+        <div>
+          <div className="text-[14px] font-bold text-blue-600 mb-3 pl-3 border-l-4 border-blue-600">整体预测表现</div>
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="bg-blue-600 text-white">
+                <th className="py-2.5 px-4 text-left font-medium">指标</th>
+                <th className="py-2.5 px-4 text-left font-medium">数值</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['客户预测总需求量', '128 万台'],
+                ['实际发货数量', '105 万台'],
+                ['3个月加权销售预测准确率', '+22%'],
+                ['3个月加权AI预测准确率', '—'],
+                ['销售预测准确率', '+15%'],
+                ['AI预测准确率', '+15%'],
+                ['销售预测偏差率', '+15%'],
+                ['AI预测偏差率', '+15%'],
+              ].map(([label, value], i) => (
+                <tr key={i} className="border-b border-gray-100 hover:bg-blue-50/30">
+                  <td className="py-2.5 px-4 text-gray-700">{label}</td>
+                  <td className={`py-2.5 px-4 font-semibold ${value.startsWith('+') ? 'text-red-600' : value === '—' ? 'text-blue-600' : 'text-gray-800'}`}>{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* 明细维度洞察 */}
+        <div>
+          <div className="text-[14px] font-bold text-blue-600 mb-3 pl-3 border-l-4 border-blue-600">明细维度洞察（高偏差 Top 10）</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px] min-w-[900px]">
+              <thead>
+                <tr className="bg-blue-600 text-white">
+                  <th className="py-2 px-2 text-left font-medium">客户</th>
+                  <th className="py-2 px-2 text-left font-medium">Model</th>
+                  <th className="py-2 px-2 text-left font-medium">DP</th>
+                  <th className="py-2 px-2 text-left font-medium">AI预测</th>
+                  <th className="py-2 px-2 text-left font-medium">实际发货</th>
+                  <th className="py-2 px-2 text-left font-medium">销售偏差率</th>
+                  <th className="py-2 px-2 text-left font-medium">销售准确率</th>
+                  <th className="py-2 px-2 text-left font-medium">3月销售准确率</th>
+                  <th className="py-2 px-2 text-left font-medium">AI偏差率</th>
+                  <th className="py-2 px-2 text-left font-medium">AI准确率</th>
+                  <th className="py-2 px-2 text-left font-medium">3月AI准确率</th>
+                  <th className="py-2 px-2 text-left font-medium">FVA判定</th>
+                  <th className="py-2 px-2 text-left font-medium">机型分类</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailData.map((row, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-blue-50/30">
+                    <td className="py-2 px-2 font-medium text-gray-800">{row.customer}</td>
+                    <td className="py-2 px-2 text-gray-600">{row.model}</td>
+                    <td className="py-2 px-2">{row.dp}</td>
+                    <td className="py-2 px-2">{row.ai}</td>
+                    <td className="py-2 px-2">{row.actual}</td>
+                    <td className={`py-2 px-2 font-semibold ${row.salesDeviation.startsWith('+') ? 'text-red-600' : 'text-green-600'}`}>{row.salesDeviation}</td>
+                    <td className={`py-2 px-2 font-semibold ${parseInt(row.salesAccuracy) < 70 ? 'text-red-600' : 'text-blue-600'}`}>{row.salesAccuracy}</td>
+                    <td className={`py-2 px-2 font-semibold ${parseInt(row.sales3m) < 70 ? 'text-red-600' : 'text-blue-600'}`}>{row.sales3m}</td>
+                    <td className={`py-2 px-2 font-semibold ${row.aiDeviation.startsWith('+') ? 'text-red-600' : 'text-green-600'}`}>{row.aiDeviation}</td>
+                    <td className={`py-2 px-2 font-semibold ${parseInt(row.aiAccuracy) < 70 ? 'text-red-600' : 'text-blue-600'}`}>{row.aiAccuracy}</td>
+                    <td className={`py-2 px-2 font-semibold ${parseInt(row.ai3m) < 70 ? 'text-red-600' : 'text-blue-600'}`}>{row.ai3m}</td>
+                    <td className="py-2 px-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${row.fva === '调整有效' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{row.fva}</span>
+                    </td>
+                    <td className="py-2 px-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${row.category === 'ML自动' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'}`}>{row.category}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-2">* 仅展示触发阈值的 Top 10（按偏差率绝对值降序）</p>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mt-3 text-[11px] text-gray-600 space-y-1">
+            <p className="font-semibold text-gray-700">分类规则：</p>
+            <p><span className="bg-blue-50 text-blue-700 px-1 rounded font-mono text-[10px]">ML自动</span>：AI预测准确率 &gt; 70% 且 AI预测偏差率 &lt; +/-30%</p>
+            <p><span className="bg-red-50 text-red-700 px-1 rounded font-mono text-[10px]">需人工介入</span>：AI预测准确率 &lt;= 70% 且 AI预测偏差率 &gt;= +/-30%</p>
+            <p><span className="font-medium">FVA判定</span>：销售预测准确率 &gt; AI预测准确率 → 调整有效；反之 → 调整无效</p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="text-center text-[11px] text-gray-400 pt-3 border-t border-gray-100">
+          报告生成时间：2026年6月 | 数据来源：CRM系统 + SAP Billing | 复盘周期：P260607-14
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', role: 'agent', content: '您好！我是您的需求感知/共识助手。有什么我可以帮您的？', type: 'text' }
@@ -5412,12 +5533,20 @@ export default function App() {
           data: rules
         };
         setMessages(prev => [...prev, agentMsg]);
+      } else if (text.includes('复盘') || text.includes('retrospective')) {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '已为您生成销售预测准确率 & 偏差复盘报告，复盘周期：P260607-14。',
+          type: 'retrospective'
+        };
+        setMessages(prev => [...prev, agentMsg]);
       } else {
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '抱歉，我目前主要支持查询客户预测数据。您可以尝试点击上方的常用语。', 
-          type: 'text' 
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '抱歉，我目前主要支持查询客户预测数据。您可以尝试点击上方的常用语。',
+          type: 'text'
         };
         setMessages(prev => [...prev, agentMsg]);
       }
@@ -5816,9 +5945,9 @@ export default function App() {
                   )}
                   {msg.type === 'rules-table' && (
                     <div className="mt-4 w-full overflow-hidden flex flex-col items-start gap-3">
-                      <AnomalyRulesTable 
-                        rules={anomalyRules.length > 0 ? anomalyRules : msg.data} 
-                        onToggle={handleToggleRule} 
+                      <AnomalyRulesTable
+                        rules={anomalyRules.length > 0 ? anomalyRules : msg.data}
+                        onToggle={handleToggleRule}
                         onEdit={handleEditRule}
                       />
                       <div className="flex gap-3 mt-2">
@@ -5829,6 +5958,11 @@ export default function App() {
                           保存并执行
                         </button>
                       </div>
+                    </div>
+                  )}
+                  {msg.type === 'retrospective' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <RetrospectiveReport />
                     </div>
                   )}
                 </div>
