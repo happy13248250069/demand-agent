@@ -1217,6 +1217,8 @@ const StrategyAdjustmentTooltip = ({ rule, situation, tag, feedback }: { rule: s
   </div>
 );
 
+const llmReasoningCache = new Map<string, string>();
+
 const EditableCell = ({ 
   value, 
   isEditable, 
@@ -1288,13 +1290,20 @@ const EditableCell = ({
   useEffect(() => {
     const handleClickOutside = () => setShowPopup(false);
     if (showPopup) {
-      window.addEventListener('click', handleClickOutside);
+      const timer = setTimeout(() => window.addEventListener('click', handleClickOutside), 0);
+      return () => { clearTimeout(timer); window.removeEventListener('click', handleClickOutside); };
     }
     return () => window.removeEventListener('click', handleClickOutside);
   }, [showPopup]);
 
   useEffect(() => {
     if (showPopup && hasAnomalyPopup && !llmReasoning && !isLoadingLlm) {
+      const cacheKey = `${startRowId}-${startColumnKey}`;
+      const cached = llmReasoningCache.get(cacheKey);
+      if (cached) {
+        setLlmReasoning(cached);
+        return;
+      }
       setIsLoadingLlm(true);
       const externalInfos = [
         { title: '小米电视宣布618大促提前启动，备货量同比增长25%', content: '小米电视宣布今年618年中大促将提前至5月15日启动，涵盖55寸、65寸、75寸全系电视品类，预计面板备货量同比增长25%以上。', source: '企业公告' },
@@ -1312,6 +1321,7 @@ const EditableCell = ({
       ).then(text => {
         setLlmReasoning(text);
         setIsLoadingLlm(false);
+        llmReasoningCache.set(cacheKey, text);
       });
     }
   }, [showPopup, hasAnomalyPopup]);
@@ -5867,8 +5877,8 @@ export default function App() {
                   </div>
                   {msg.type === 'table' && (
                     <div className="mt-4 w-full overflow-hidden">
-                      <ForecastTable 
-                        data={forecastData} 
+                      <ForecastTable
+                        data={forecastData.map(r => r.item === '销售FCST (ETD)' ? { ...r, isAnomaly: {}, aiSummaries: {}, violatedRules: {} } : r)}
                         groupingType={msg.groupingType}
                         onUpdate={handleUpdate} 
                         onUpdateAttribute={handleUpdateAttribute}
