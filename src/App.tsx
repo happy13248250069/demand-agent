@@ -2559,17 +2559,18 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                                   allowModificationMarker={rowData.item === '销售FCST (ETD)' || rowData.item === 'ExtraSales'}
                                 />
                               ) : (
-                                <div className="w-full h-full flex items-center justify-center relative group cursor-default">
-                                  {rowData.values[key] || 0}
-                                  {rowData.isAIPrediction?.[key] && (
-                                    <>
-                                      <div className="absolute top-0.5 right-0.5">
-                                        <Bot size={8} className="text-blue-500" />
-                                      </div>
-                                      <AIPredictionTooltip simple={true} />
-                                    </>
-                                  )}
-                                </div>
+                                <EditableCell
+                                  value={rowData.values[key] || 0}
+                                  isEditable={false}
+                                  isAIPrediction={!!rowData.isAIPrediction?.[key]}
+                                  isAnomaly={rowData.isAnomaly?.[key]}
+                                  aiSummary={rowData.aiSummaries?.[key]}
+                                  violatedRules={rowData.violatedRules?.[key]}
+                                  onSave={() => {}}
+                                  oldValue={rowData.prevValues?.[key]}
+                                  startRowId={rowData.id}
+                                  startColumnKey={key}
+                                />
                               )}
                             </td>
                           );
