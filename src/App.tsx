@@ -854,77 +854,66 @@ const generateInitialData = (): ForecastRow[] => {
           MONTHS.forEach((m) => {
             m.weeks.forEach((w) => {
               const key = `${m.name}-${w}`;
-              // Models have smaller values (roughly 1/3 of total)
-              const baseValue = Math.floor((c.name === '华为' ? 300 : 100) / 3);
-              let val = baseValue;
-              let prevVal = baseValue;
-              const specialRules: Record<string, { rule: string; situation: string; tag: string; feedback: string }> = {};
+              const modelBase = Math.floor((c.name === '三星电子' ? 400 : c.name === 'LG电子' ? 350 : c.name === '海信' ? 300 : c.name === 'TCL电子' ? 300 : 200) / 3);
+              let val = modelBase;
+              let prevVal = modelBase;
 
-              const isWK2 = w === 'WK2\n260101-03';
+              const isWK3 = w === 'WK3\n260104-10';
               const isWK4 = w === 'WK4\n260111-17';
-              
+              const isWK5 = w === 'WK5\n260118-24';
+
               if ((item as string) === 'ExtraSales') {
                 val = 0;
-                if (isWK2 && c.name === '小米' && s === '55寸' && model === 'Model A V1.1') {
-                  val = 20;
-                  prevVal = 0;
-                  tags[key] = "提前备货";
-                  reasons[key] = "由于物流周期拉长，客户要求提前备货";
-                }
-              } else if (w === '12-Jan') {
-                val = baseValue + 10;
-                if (item === '客户FCST') {
-                  if (c.name === '华为') prevVal = val - 5;
-                  if (c.name === '小米') prevVal = val + 10;
-
-                  if (c.name === '小米') {
-                    if (s === '55寸') {
-                      aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：锁定期（Week 20-22）内 FCST 与上一版本相比，任何变化均视为异常。\n* 本次情况：上一版本 10,000 件 → 本周版本 12,000 件，变动 +20%。\n* \n② 供需缺口规则\n* 规则描述：销售 FCST 超出供应能力的幅度不得超过 10%。\n* 本次情况：本周客户 FCST 12,000 件，供应上限 10,000 件，超出 20%。\n*";
-                    } else {
-                      aiSummaries[key] = "该model处于EOP状态，且FCST与供应计划偏差50%。猜测由于产品生命周期变动，供应计划已相应调整，但客户需求信息未同步，导致供需脱节。建议立即与客户沟通。";
-                      violatedRules[key] = [
-                        "规则1：锁定期内fcst+100（+30%）。",
-                        "规则2：EOP状态，ModelA的EOP时间：2026-01-23",
-                        "规则3：供应100，超供应50（+50%）"
-                      ];
-                    }
-                  }
-                }
-              } else if (isWK4 && c.name === '小米' && s === '55寸' && model === 'Model A V1.1') {
-                if (item === '销售FCST (ETD)') {
-                  val = 33;
-                  prevVal = 33;
-                  isAnomaly[key] = true;
-                  isAIPrediction[key] = true;
-                } else if (item === '客户FCST') {
-                  val = 66;
-                  prevVal = 66;
-                }
-              } else if (m.name === 'Apr-26' || m.name === 'May-26' || m.name === 'Jun-26') {
-                val = baseValue * 4;
+              } else if (m.name === 'M2604' || m.name === 'M2605' || m.name === 'M2606') {
+                val = modelBase * 4;
                 prevVal = val;
               }
-              
+
+              // Model行异常数据 - 小米 (与Total行对应)
+              if (c.name === '小米' && item === '客户FCST') {
+                // 55寸 WK3: 规则1+3
+                if (s === '55寸' && isWK3) {
+                  val = Math.floor(800 / 3); prevVal = Math.floor(500 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发2 条规则\n① 客户FCST变化\n* 规则描述：锁定期（Week 2-4）内 FCST 与上一版本相比，任何变化均视为异常。\n* 本次情况：上一版本 167 件 → 本周版本 267 件，变动 +60%。\n* 结论：违反规则。客户在锁定期内大幅上调需求。\n② 供需缺口规则\n* 规则描述：客户FCST超出供应能力的幅度不得超过10%。\n* 本次情况：本周客户 FCST 267 件，供应上限 200 件，超出 33%。\n* 结论：违反规则。当前产能无法满足客户申报量。";
+                  violatedRules[key] = ["规则1：锁定期内FCST+60%。", "规则3：超供应33%。"];
+                }
+                // 65寸 WK4: 规则2(EOP)
+                if (s === '65寸' && isWK4) {
+                  val = Math.floor(250 / 3); prevVal = Math.floor(250 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 产品生命周期校验\n* 规则描述：处于EOP阶段的产品，不应有新增FCST。\n* 本次情况：该Model已于2026-01-15进入EOP状态，但仍有FCST。\n* 结论：违反规则。EOP产品不应有新增预测。";
+                  violatedRules[key] = ["规则2：产品已EOP，不应有FCST。"];
+                }
+                // 75寸 WK3: 规则4+6
+                if (s === '75寸' && isWK3) {
+                  val = Math.floor(120 / 3); prevVal = Math.floor(380 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发2 条规则\n① 销售目标达成\n* 规则描述：累积销售+未来预测/年度目标<90%为异常。\n* 本次情况：达成率仅65%。\n* 结论：违反规则。\n② 历史趋势偏离\n* 规则描述：偏离超过30%视为异常。\n* 本次情况：偏离-66%。\n* 结论：违反规则。";
+                  violatedRules[key] = ["规则4：达成率65%。", "规则6：历史偏离-66%。"];
+                }
+                // 55寸 WK5: 规则5
+                if (s === '55寸' && isWK5) {
+                  val = Math.floor(600 / 3); prevVal = Math.floor(580 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 销售FCST与客户FCST偏差\n* 规则描述：偏差超过10%视为异常。\n* 本次情况：客户FCST 200件，销售FCST 117件，偏差-42%。\n* 结论：违反规则。销售预测大幅低于客户申报。";
+                  violatedRules[key] = ["规则5：销售vs客户FCST偏差-42%。"];
+                }
+                // 65寸 WK5: 规则7
+                if (s === '65寸' && isWK5) {
+                  val = Math.floor(450 / 3); prevVal = Math.floor(300 / 3);
+                  isAnomaly[key] = true;
+                  aiSummaries[key] = "异常分析:\n触发1 条规则\n① 重点产品达成分析\n* 规则描述：KPI重点产品达成率<90%为异常。\n* 本次情况：65寸达成率仅78%。\n* 结论：违反规则。需加大出货力度。";
+                  violatedRules[key] = ["规则7：重点产品达成率78%。"];
+                }
+              }
+
+              if (item === 'AI预测') {
+                isAIPrediction[key] = true;
+              }
+
               values[key] = val;
               prevValues[key] = prevVal;
-
-              // Special Rule Analysis Content
-              if (isWK4 && c.name === '小米' && s === '55寸' && model === 'Model A V1.1' && item === '销售FCST (ETD)') {
-                specialRules[key] = {
-                  rule: '规则①：销售FCST vs 客户FCST',
-                  situation: '销售fcst33 → 客户fcst66，变动 -50%。',
-                  tag: '策略性调整 - 客户确认虚高',
-                  feedback: '与客户采购经理电话确认，对方表示上周提交的66件为系统误操作，实际需求仅33件，剩余部分为重复录入，已要求客户下次注意。'
-                };
-              }
-
-              // Also mark some other AI predictions to show the effect
-              if ((item === '销售FCST (ETD)' || item === 'AI预测') && (w === 'WK5\n260118-24' || w === 'WK6\n260125-31') && c.name === '小米') {
-                isAIPrediction[key] = true;
-              }
-              if (item === 'AI预测' && isWK4 && c.name === '小米' && s === '55寸' && model === 'Model A V1.1') {
-                isAIPrediction[key] = true;
-              }
             });
           });
 
@@ -2412,16 +2401,36 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                     </td>
                     {MONTHS.flatMap(m => m.weeks.map(w => {
                       const key = `${m.name}-${w}`;
+                      const cellIsAnomaly = rowData.isAnomaly?.[key];
+                      const cellAiSummary = rowData.aiSummaries?.[key];
+                      const cellViolatedRules = rowData.violatedRules?.[key];
+                      const hasAnomalyContent = !!(cellAiSummary && cellAiSummary.startsWith('异常分析:\n'));
                       return (
-                        <td key={key} className="border border-gray-200 p-0 h-9 bg-gray-50/50 text-gray-500">
-                          <div className="w-full h-full flex items-center justify-center font-medium relative group cursor-default">
-                            {rowData.values[key] || 0}
-                            {rowData.isAIPrediction?.[key] && (
-                              <div className="absolute top-0.5 right-0.5">
-                                <Bot size={8} className="text-blue-500" />
-                              </div>
-                            )}
-                          </div>
+                        <td key={key} className="border border-gray-200 p-0 h-9">
+                          {cellIsAnomaly && hasAnomalyContent ? (
+                            <EditableCell
+                              value={rowData.values[key] || 0}
+                              isEditable={false}
+                              isAnomaly={true}
+                              aiSummary={cellAiSummary}
+                              violatedRules={cellViolatedRules}
+                              onSave={() => {}}
+                              oldValue={rowData.prevValues?.[key]}
+                              startRowId={rowData.id}
+                              startColumnKey={key}
+                            />
+                          ) : (
+                            <div className={`w-full h-full flex items-center justify-center font-medium relative group cursor-default ${
+                              cellIsAnomaly ? 'bg-red-100 text-red-600 font-bold' : 'bg-gray-50/50 text-gray-500'
+                            }`}>
+                              {(rowData.values[key] || 0).toLocaleString()}
+                              {rowData.isAIPrediction?.[key] && (
+                                <div className="absolute top-0.5 right-0.5">
+                                  <Bot size={8} className="text-blue-500" />
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                       );
                     }))}
