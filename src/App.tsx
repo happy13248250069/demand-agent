@@ -908,9 +908,6 @@ const generateInitialData = (): ForecastRow[] => {
                 }
               }
 
-              if (item === 'AI预测') {
-                isAIPrediction[key] = true;
-              }
 
               values[key] = val;
               prevValues[key] = prevVal;
