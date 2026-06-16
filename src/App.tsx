@@ -738,10 +738,12 @@ const generateInitialData = (): ForecastRow[] => {
         const tags: Record<string, string> = {};
         const aiSummaries: Record<string, string> = {};
         const violatedRules: Record<string, string[]> = {};
-        
+        const isAIPrediction: Record<string, boolean> = {};
+
         MONTHS.forEach((m) => {
           m.weeks.forEach((w) => {
             const key = `${m.name}-${w}`;
+            if (item === 'AI预测') { isAIPrediction[key] = true; }
             const baseValue = c.name === '三星电子' ? 400 : c.name === 'LG电子' ? 350 : c.name === '海信' ? 300 : c.name === 'TCL电子' ? 300 : 200;
             let val = baseValue;
             let prevVal = baseValue;
@@ -865,7 +867,7 @@ const generateInitialData = (): ForecastRow[] => {
           id: `${c.name}-${s}-Total-${item}`,
           customer: c.name,
           version: 'P260329-04-002',
-          tech: 'N/A', // Totals might not have a specific tech if multiple models mixed, but for this app let's just use LTPS/VA balance if needed, or keep N/A for totals
+          tech: 'N/A',
           size: s,
           specs: mockSpecs[s] || '-',
           item,
@@ -877,6 +879,7 @@ const generateInitialData = (): ForecastRow[] => {
           tags,
           aiSummaries,
           violatedRules,
+          isAIPrediction,
         });
       });
 
@@ -896,6 +899,7 @@ const generateInitialData = (): ForecastRow[] => {
           MONTHS.forEach((m) => {
             m.weeks.forEach((w) => {
               const key = `${m.name}-${w}`;
+              if (item === 'AI预测') { isAIPrediction[key] = true; }
               const modelBase = Math.floor((c.name === '三星电子' ? 400 : c.name === 'LG电子' ? 350 : c.name === '海信' ? 300 : c.name === 'TCL电子' ? 300 : 200) / 3);
               let val = modelBase;
               let prevVal = modelBase;
