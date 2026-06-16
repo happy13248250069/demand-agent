@@ -1270,9 +1270,11 @@ const EditableCell = ({
   const hasAnomalyPopup = !!(aiSummary && aiSummary.startsWith('异常分析:\n'));
 
   const handleClick = (e: React.MouseEvent) => {
+    console.log('EditableCell clicked:', { isAIPrediction, isAnomaly, hasAnomalyPopup, specialRuleData: !!specialRuleData, showPopup, value });
     if (specialRuleData || isAIPrediction || (isAnomaly && hasAnomalyPopup)) {
       e.stopPropagation();
       setShowPopup(!showPopup);
+      console.log('Popup toggled to:', !showPopup);
     } else if (isEditable) {
       handleDoubleClick(e);
     }
@@ -1288,12 +1290,15 @@ const EditableCell = ({
   };
 
   useEffect(() => {
+    if (!showPopup) return;
     const handleClickOutside = () => setShowPopup(false);
-    if (showPopup) {
-      const timer = setTimeout(() => window.addEventListener('click', handleClickOutside), 0);
-      return () => { clearTimeout(timer); window.removeEventListener('click', handleClickOutside); };
-    }
-    return () => window.removeEventListener('click', handleClickOutside);
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, [showPopup]);
 
   useEffect(() => {
