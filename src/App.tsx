@@ -1270,11 +1270,9 @@ const EditableCell = ({
   const hasAnomalyPopup = !!(aiSummary && aiSummary.startsWith('异常分析:\n'));
 
   const handleClick = (e: React.MouseEvent) => {
-    console.log('EditableCell clicked:', { isAIPrediction, isAnomaly, hasAnomalyPopup, specialRuleData: !!specialRuleData, showPopup, value });
     if (specialRuleData || isAIPrediction || (isAnomaly && hasAnomalyPopup)) {
       e.stopPropagation();
       setShowPopup(!showPopup);
-      console.log('Popup toggled to:', !showPopup);
     } else if (isEditable) {
       handleDoubleClick(e);
     }
@@ -1412,6 +1410,7 @@ const EditableCell = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             className="bg-white rounded-2xl shadow-[0_20px_80px_-10px_rgba(0,0,0,0.5)] border border-gray-200 w-[560px] max-h-[85vh] flex flex-col"
           >
             <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-gray-100 shrink-0">
@@ -1437,7 +1436,11 @@ const EditableCell = ({
           onClick={(e) => e.stopPropagation()}
           className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/20"
         >
-          <div className="bg-white rounded-2xl shadow-[0_20px_80px_-10px_rgba(0,0,0,0.5)] border border-gray-200 w-[620px] max-h-[85vh] flex flex-col">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-[0_20px_80px_-10px_rgba(0,0,0,0.5)] border border-gray-200 w-[620px] max-h-[85vh] flex flex-col"
+          >
             <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-gray-100 shrink-0">
               <span className="text-[16px] font-black text-gray-900">AI异常归因</span>
               <button
@@ -2576,7 +2579,7 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                                   startRowId={rowData.id}
                                   startColumnKey={key}
                                   isAnomaly={rowData.isAnomaly[key]}
-                                  isAIPrediction={false}
+                                  isAIPrediction={row.item === 'AI预测'}
                                   specialRuleData={rowData.specialRuleData?.[key]}
                                   allowModificationMarker={rowData.item === '销售FCST (ETD)' || rowData.item === 'ExtraSales'}
                                 />
@@ -4718,7 +4721,7 @@ const ForecastTable = ({
                             tag={row.tags[key]}
                             aiSummary={row.aiSummaries?.[key]}
                             violatedRules={row.violatedRules?.[key]}
-                            isAIPrediction={false}
+                            isAIPrediction={row.item === 'AI预测'}
                             onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
                             oldValue={row.prevValues?.[key]}
                           />
@@ -4809,7 +4812,7 @@ const ForecastTable = ({
                                 tag={row.tags[key]}
                                 aiSummary={row.aiSummaries?.[key]}
                                 violatedRules={row.violatedRules?.[key]}
-                                isAIPrediction={false}
+                                isAIPrediction={row.item === 'AI预测'}
                                 onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
                                 startRowId={row.id}
                                 startColumnKey={key}
