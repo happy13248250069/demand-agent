@@ -1399,25 +1399,31 @@ const EditableCell = ({
         <div className="absolute top-0 right-0 w-0 h-0 border-t-[8px] border-t-orange-500 border-l-[8px] border-l-transparent" />
       )}
 
-      {/* AI预测值解读弹窗 (click-triggered) */}
-      {showPopup && isAIPrediction && (
+      {/* AI预测值解读弹窗 (click-triggered, 全屏模态) */}
+      {showPopup && isAIPrediction && createPortal(
         <div
-          onClick={(e) => e.stopPropagation()}
-          className="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white rounded-2xl shadow-[0_10px_60px_-10px_rgba(0,0,0,0.4)] z-[10000] text-left border border-gray-200 cursor-default w-[480px]"
+          onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
+          className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/20"
         >
-          <div className="flex items-center justify-between px-5 pt-4 pb-2 border-b border-gray-100">
-            <span className="text-[14px] font-black text-gray-900">AI预测值解读</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
-              className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
-            >
-              <X size={14} className="text-gray-500" />
-            </button>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl shadow-[0_20px_80px_-10px_rgba(0,0,0,0.5)] border border-gray-200 w-[560px] max-h-[85vh] flex flex-col"
+          >
+            <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-gray-100 shrink-0">
+              <span className="text-[16px] font-black text-gray-900">AI预测值解读</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <X size={16} className="text-gray-500" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto">
+              <AIPredictionTooltip simple={aiPredictionSimple} />
+            </div>
           </div>
-          <div className="p-5 max-h-[70vh] overflow-y-auto">
-            <AIPredictionTooltip simple={aiPredictionSimple} />
-          </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* 异常归因弹窗 (click-triggered, with DeepSeek reasoning) */}
