@@ -6149,11 +6149,17 @@ export default function App() {
             >
               查询今日外部信息
             </button>
-            <button 
+            <button
               onClick={() => handleQuickAction('查询异常规则')}
               className="whitespace-nowrap px-3 py-1.5 bg-gray-50 text-gray-600 border border-gray-100 rounded-full text-xs font-medium hover:bg-gray-100 transition-colors shadow-sm"
             >
               查询异常规则
+            </button>
+            <button
+              onClick={() => handleQuickAction('复盘报告')}
+              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+            >
+              预测复盘
             </button>
           </div>
 
