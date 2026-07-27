@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Send, User, Bot, Edit2, Check, X, AlertCircle, ChevronRight, ChevronDown, Loader2, BarChart3, Target, Tag, Plus, Eye, EyeOff, Activity, ArrowUpRight, ArrowDownRight, Crown, Download, Upload, Search, Settings, Filter, RefreshCcw, RefreshCw, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -398,9 +398,10 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'mnt-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'retrospective';
+  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
+  buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
 }
 
 interface ValidationRule {
@@ -410,14 +411,64 @@ interface ValidationRule {
   failCount?: number;
 }
 
-interface AnomalyRule {
+type AnomalyBU = 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
+type AnomalyScene = '客户FCST分析' | '销售FCST分析' | 'DP分析';
+
+interface ThresholdInput {
   id: string;
+  label: string;
+  prefix: string;
+  suffix: string;
+  defaultValue: number;
+}
+
+interface ThresholdGroup {
+  title: string;
+  hint?: string;
+  required?: boolean;
+  preHint?: string;
+  conditions?: { title: string; inputs: ThresholdInput[] }[];
+  inputs?: ThresholdInput[];
+}
+
+interface RuleDrawerConfig {
+  ruleKey: string;
+  title: string;
+  fixedRules?: string[];
+  thresholds?: ThresholdGroup[];
+}
+
+interface AnomalyRuleDefinition {
+  id: string;
+  name: string;
+  applicableBUs: AnomalyBU[];
+  dimTV: string;
+  dimIT: string;
+  dimMC: string;
+  timeGranularity: string;
+  parameterSummary: string;
+  scenes: AnomalyScene[];
+  drawerConfig: RuleDrawerConfig;
+}
+
+interface AnomalyRuleRow {
+  id: string;
+  ruleId: string;
+  bu: AnomalyBU;
   isEnabled: boolean;
   name: string;
   dimension: string;
   timeGranularity: string;
-  parameters: string;
-  scope: string;
+  parameterSummary: string;
+  scenes: AnomalyScene[];
+}
+
+interface DrawerEditState {
+  isOpen: boolean;
+  ruleId: string | null;
+  bu: AnomalyBU | null;
+  dimension: string | null;
+  timeGranularity: string | null;
 }
 
 interface ExternalInfo {
@@ -431,6 +482,251 @@ interface ExternalInfo {
   contentSummary: string;
   agentAnalysis: string;
 }
+
+const BU_ALL: AnomalyBU[] = ['TV', 'CID', 'MNT', 'NB', '车载', 'MC'];
+
+const BU_TAG_STYLES: Record<AnomalyBU, { bg: string; text: string }> = {
+  'TV': { bg: 'bg-blue-50', text: 'text-blue-600' },
+  'CID': { bg: 'bg-indigo-50', text: 'text-indigo-600' },
+  'MNT': { bg: 'bg-green-50', text: 'text-green-600' },
+  'NB': { bg: 'bg-teal-50', text: 'text-teal-600' },
+  '车载': { bg: 'bg-red-50', text: 'text-red-600' },
+  'MC': { bg: 'bg-orange-50', text: 'text-orange-600' },
+};
+
+const ANOMALY_RULE_DEFINITIONS: AnomalyRuleDefinition[] = [
+  {
+    id: 'fcst-change', name: '客户FCST变化识别', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别+尺寸',
+    timeGranularity: '周+月+季度', parameterSummary: '月5%，季10%',
+    scenes: ['客户FCST分析'],
+    drawerConfig: {
+      ruleKey: 'fcst-change', title: '客户FCST变化识别',
+      fixedRules: ['锁定期内变更均触发高风险预警，提示销售介入确认需求（此规则不可修改）'],
+      thresholds: [{
+        title: '锁定期外变化幅度阈值', required: true, hint: '超出阈值范围的变化将触发异常预警',
+        inputs: [
+          { id: 'fcst-monthly', label: '月度阈值', prefix: '±', suffix: '%', defaultValue: 5 },
+          { id: 'fcst-quarterly', label: '季度阈值', prefix: '±', suffix: '%', defaultValue: 10 },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'lifecycle', name: '产品生命周期验证', applicableBUs: BU_ALL,
+    dimTV: 'Model', dimIT: 'Model', dimMC: 'Model',
+    timeGranularity: '月', parameterSummary: '—',
+    scenes: ['客户FCST分析', '销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'lifecycle', title: '产品生命周期状态验证',
+      fixedRules: [
+        'EOP后仍有客户FCST提报，自动触发高呆滞风险预警，提示销售核查是否错报（此规则不可修改）',
+        '量产产品M+6内无任何需求，自动触发产品EOL风险预警（此规则不可修改）'
+      ],
+    }
+  },
+  {
+    id: 'supply-demand', name: '需求供应对比', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    timeGranularity: '月', parameterSummary: '偏差±10%',
+    scenes: ['客户FCST分析', '销售FCST分析'],
+    drawerConfig: {
+      ruleKey: 'supply-demand', title: '需求供应对比',
+      thresholds: [{
+        title: '供需偏差比例阈值', required: true, hint: '偏差比例 = (客户FCST - Supply/Allocation) / Supply/Allocation',
+        inputs: [{ id: 'sd-deviation', label: '偏差阈值', prefix: '±', suffix: '%', defaultValue: 10 }]
+      }]
+    }
+  },
+  {
+    id: 'target', name: '销售目标达成对比', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    timeGranularity: '月+季度', parameterSummary: '达成率≤95%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'target', title: '销售目标达成对比',
+      thresholds: [{
+        title: '目标达成率预警阈值', required: true, hint: '月/季度目标达成率低于此值时触发预警',
+        inputs: [{ id: 'target-lower', label: '达成率下限', prefix: '≤', suffix: '%', defaultValue: 95 }]
+      }]
+    }
+  },
+  {
+    id: 'sales-fcst-change', name: '销售FCST变化识别', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    timeGranularity: '月+季度', parameterSummary: '变化幅度±10%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'sales-fcst-change', title: '销售FCST变化识别',
+      fixedRules: ['锁定期（21-45天）内变更均触发预警提醒（此规则不可修改）'],
+      thresholds: [{
+        title: '锁定期外变化幅度阈值', required: true, hint: '本版销售FCST相比上版变化超过此值触发预警',
+        inputs: [{ id: 'sales-change', label: '变化幅度', prefix: '±', suffix: '%', defaultValue: 10 }]
+      }]
+    }
+  },
+  {
+    id: 'sales-vs-customer', name: '销售FCST vs 客户FCST', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    timeGranularity: '周+月+季度', parameterSummary: '偏差±10%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'sales-vs-customer', title: '销售FCST vs 客户FCST',
+      thresholds: [{
+        title: '偏差比例阈值', required: true, hint: '差异比例 = (销售FCST - 客户FCST) / 客户FCST',
+        inputs: [
+          { id: 'svc-deviation', label: '偏差阈值', prefix: '±', suffix: '%', defaultValue: 10 },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'strategy', name: '策分偏差分析', applicableBUs: ['TV'],
+    dimTV: '客户+面板厂+尺寸', dimIT: '客户+面板厂+尺寸', dimMC: '客户+面板厂+尺寸',
+    timeGranularity: '季度', parameterSummary: '≤90%或≥110%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'strategy', title: '策分偏差分析',
+      thresholds: [{
+        title: '策分执行率阈值', required: true, hint: '策分执行率 = 季度销售预测总量 / 季度策分量',
+        inputs: [
+          { id: 'strat-lower', label: '达成不足（下限）', prefix: '≤', suffix: '%', defaultValue: 90 },
+          { id: 'strat-upper', label: '超卖风险（上限）', prefix: '≥', suffix: '%', defaultValue: 110 },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'history-trend', name: '历史同期趋势偏差', applicableBUs: BU_ALL,
+    dimTV: '客户+尺寸+技术别', dimIT: '客户+面板厂+技术别', dimMC: '客户+面板厂+技术别',
+    timeGranularity: '月', parameterSummary: 'Y-1&Y-2同比≥±30%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'history-trend', title: '历史同期趋势偏差',
+      thresholds: [{
+        title: '同比偏差触发条件', required: true,
+        preHint: '需同时满足以下两个条件才触发预警（AND关系）',
+        hint: '本年预测需同时大幅偏离过去两年实际出货才触发',
+        conditions: [
+          { title: '条件 1', inputs: [{ id: 'hist-y1', label: 'Y-1 同比变化', prefix: '≥ ±', suffix: '%', defaultValue: 30 }] },
+          { title: '条件 2', inputs: [{ id: 'hist-y2', label: 'Y-2 同比变化', prefix: '≥ ±', suffix: '%', defaultValue: 30 }] },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'key-product', name: '重点产品达成分析', applicableBUs: BU_ALL,
+    dimTV: '客户+产品类别', dimIT: '客户+产品类别', dimMC: '客户+产品类别',
+    timeGranularity: '年+半年+月', parameterSummary: '达成率≤90%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'key-product', title: '重点产品达成分析',
+      thresholds: [{
+        title: 'KPI产品达成率阈值', required: true, hint: '达成率 = (YTD销售达成 + 未来预测) / KPI产品年度目标',
+        inputs: [{ id: 'kp-lower', label: '达成率下限', prefix: '≤', suffix: '%', defaultValue: 90 }]
+      }]
+    }
+  },
+  {
+    id: 'dp-vs-dp', name: '本版DP VS 上版DP', applicableBUs: BU_ALL,
+    dimTV: '客户+面板厂+尺寸', dimIT: '客户+面板厂+技术别+尺寸', dimMC: '客户+面板厂+技术别+尺寸',
+    timeGranularity: '月+季度', parameterSummary: '变化率±10%',
+    scenes: ['DP分析'],
+    drawerConfig: {
+      ruleKey: 'dp-vs-dp', title: '本版DP VS 上版DP',
+      thresholds: [{
+        title: 'DP版本变化率阈值', required: true, hint: '变化率 = (本版DP - 上版DP) / 上版DP',
+        inputs: [{ id: 'dp-change', label: '变化率', prefix: '±', suffix: '%', defaultValue: 10 }]
+      }]
+    }
+  },
+  {
+    id: 'dp-vs-supply', name: '本版DP VS Supply', applicableBUs: BU_ALL,
+    dimTV: '客户+面板厂+尺寸', dimIT: '客户+面板厂+技术别', dimMC: '客户+面板厂+尺寸',
+    timeGranularity: '月+季度', parameterSummary: '变化率±10%',
+    scenes: ['DP分析'],
+    drawerConfig: {
+      ruleKey: 'dp-vs-supply', title: '本版DP VS Supply/Allocation',
+      thresholds: [{
+        title: '供应偏差率阈值', required: true, hint: '变化率 = (本版DP - 上版Supply/Allocation) / 上版Supply/Allocation',
+        inputs: [{ id: 'dps-change', label: '变化率', prefix: '±', suffix: '%', defaultValue: 10 }]
+      }]
+    }
+  },
+  {
+    id: 'dp-vs-bprp', name: '本版DP VS 供应BP/RP', applicableBUs: BU_ALL,
+    dimTV: '面板厂（大板总量）', dimIT: '面板厂（大板总量）', dimMC: '面板厂（大板总量）',
+    timeGranularity: '月', parameterSummary: '偏差率±5%',
+    scenes: ['DP分析'],
+    drawerConfig: {
+      ruleKey: 'dp-vs-bprp', title: '本版DP VS 供应BP/RP',
+      thresholds: [{
+        title: '大板BP/RP偏差率阈值', required: true, hint: '大板BP/RP偏差率 = (大板需求总量 - 供应BP/RP) / 供应BP/RP',
+        inputs: [{ id: 'bprp-dev', label: '偏差率', prefix: '±', suffix: '%', defaultValue: 5 }]
+      }]
+    }
+  },
+  {
+    id: 'avg-size', name: '平均尺寸变化', applicableBUs: ['TV'],
+    dimTV: '尺寸', dimIT: '尺寸', dimMC: '尺寸',
+    timeGranularity: '月', parameterSummary: '小尺寸占比>30%',
+    scenes: ['DP分析'],
+    drawerConfig: {
+      ruleKey: 'avg-size', title: '平均尺寸变化',
+      fixedRules: [
+        '小尺寸定义：43寸及以下（此分界线不可修改）',
+        '触发条件1：M+1月预测平均尺寸比Y-1年同期变小（YoY偏差 < 0），且43寸以下占比同比扩大（此规则不可修改）',
+        '触发条件3：M+1月平均尺寸连续小于历史两年同期：Y-1年平均尺寸YoY偏差 ≤ 0 且 Y-2年平均尺寸YoY偏差 ≤ 0（此规则不可修改）',
+      ],
+      thresholds: [{
+        title: '小尺寸大板占比阈值', required: true,
+        preHint: '触发条件2：小尺寸占比过高',
+        hint: 'M+1月预测中43寸以下大板占比超过此值触发预警',
+        inputs: [{ id: 'size-upper', label: '占比上限', prefix: '>', suffix: '%', defaultValue: 30 }]
+      }]
+    }
+  },
+  {
+    id: 'shipment-form', name: '出货形态分析', applicableBUs: ['MNT', 'NB', '车载'],
+    dimTV: '出货形态', dimIT: '出货形态', dimMC: '出货形态',
+    timeGranularity: '年+半年+月', parameterSummary: '占比偏离目标值',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'shipment-form', title: '出货形态分析',
+      thresholds: [{
+        title: '各出货形态目标占比', required: true, hint: '实际占比偏离BP目标时触发预警',
+        inputs: [
+          { id: 'ship-oc', label: 'OC 目标占比', prefix: '>', suffix: '%', defaultValue: 40 },
+          { id: 'ship-lcm', label: 'LCM 目标占比', prefix: '>', suffix: '%', defaultValue: 35 },
+          { id: 'ship-tpm', label: 'TPM 目标占比', prefix: '>', suffix: '%', defaultValue: 25 },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'market-share', name: '市场份额分析', applicableBUs: ['MNT', 'NB', 'MC', '车载'],
+    dimTV: '客户+技术别', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    timeGranularity: '月', parameterSummary: '达成率≤80%',
+    scenes: ['销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'market-share', title: '市场份额分析',
+      thresholds: [{
+        title: '月度达成率阈值', required: true, hint: '达成率 = 推算本版市场份额% / 市场份额目标%',
+        inputs: [{ id: 'ms-lower', label: '达成率下限', prefix: '≤', suffix: '%', defaultValue: 80 }]
+      }]
+    }
+  },
+  {
+    id: 'material-auth', name: '物料授权情况检查', applicableBUs: ['MC', '车载'],
+    dimTV: '客户+Model', dimIT: '客户+Model', dimMC: '客户+Model',
+    timeGranularity: '月', parameterSummary: '—',
+    scenes: ['客户FCST分析', '销售FCST分析', 'DP分析'],
+    drawerConfig: {
+      ruleKey: 'material-auth', title: '物料授权情况检查',
+      fixedRules: ['逐月累加客户FCST，当累加值超过剩余可用授权量时，从该月起触发预警并标红（此规则不可修改）'],
+    }
+  },
+];
 
 // --- Components ---
 
@@ -523,150 +819,169 @@ const SearchSelect = ({
   );
 };
 
-const AddDataModal = ({ 
-  isOpen, 
-  onClose, 
-  onAdd 
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
+const AddDataModal = ({
+  isOpen,
+  onClose,
+  onAdd
+}: {
+  isOpen: boolean;
+  onClose: () => void;
   onAdd: (newData: any) => void;
 }) => {
   const [formData, setFormData] = useState({
-    customer: '',
-    model: '',
-    version: '',
+    bu: 'TV',
+    customerGroup: '',
     productId: '',
-    shippingLocation: '',
-    volumes: {} as Record<string, number>
+    domain: '',
+    modelName: '',
+    extVersion: '',
+    productIdCode: '',
+    sapFactory: '',
+    vmiLocation: ''
   });
 
-  const customers = ['小米', '华为', 'OPPO', 'VIVO', '三星', '索尼'];
-  const models = ['Model A V1.1', 'Model B V1.1', 'Model C V1.1', 'Model D V1.1', 'Model E V1.1'];
-  const versions = ['V1.0', 'V1.1', 'V1.2', 'V2.0'];
+  const buOptions = ['TV', 'CID', 'MNT', 'NB', '车载', 'MC'];
+  const customerGroups = ['TCL品牌集团_TV', '小米集团', '华为集团', 'OPPO集团', '三星电子'];
   const productIds = ['PROD-1001', 'PROD-2022', 'PROD-3045', 'PROD-4098', 'PROD-5120'];
-  const locations = ['深圳仓库', '惠州工厂', '苏州物流中心', '东莞分拨点', '北京中转站'];
+  const modelNames = ['ST975AD04-1', 'ST975AD05-2', 'ST975AD02-8', 'STB451D01-1', 'ST3151B07-1', 'ST4251B05-2', 'ST5461D12-4'];
+  const extVersions = ['1.0', '2.1', '2.2', '2.3', '2.4', '2.5'];
+  const sapFactories = ['T1', 'T2', 'T3', 'T6', 'T9'];
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
-      <motion.div 
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+      <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-hidden flex flex-col"
       >
-        <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-blue-50/50">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg">
-              <Plus size={20} />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-gray-800">新增预测数据</h2>
-              <p className="text-[10px] text-gray-500">在该页面新增一条销售预测及其对应的各项数据</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
-            <X size={18} />
+        <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-base font-bold text-gray-800">产品与客户Mapping关系 - 新增</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+            <X size={20} className="text-gray-500" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 mb-6">
-            <SearchSelect 
-              label="客户" 
-              options={customers} 
-              value={formData.customer} 
-              onChange={(val) => setFormData(prev => ({ ...prev, customer: val }))} 
-              placeholder="请选择客户..."
-            />
-            <SearchSelect 
-              label="Model" 
-              options={models} 
-              value={formData.model} 
-              onChange={(val) => setFormData(prev => ({ ...prev, model: val }))} 
-              placeholder="请选择型号..."
-            />
-            <SearchSelect 
-              label="版次" 
-              options={versions} 
-              value={formData.version} 
-              onChange={(val) => setFormData(prev => ({ ...prev, version: val }))} 
-              placeholder="请选择版次..."
-            />
-            <SearchSelect 
-              label="Product ID" 
-              options={productIds} 
-              value={formData.productId} 
-              onChange={(val) => setFormData(prev => ({ ...prev, productId: val }))} 
-              placeholder="请选择产品ID..."
-            />
-            <SearchSelect 
-              label="收货地点" 
-              options={locations} 
-              value={formData.shippingLocation} 
-              onChange={(val) => setFormData(prev => ({ ...prev, shippingLocation: val }))} 
-              placeholder="请选择收货地点..."
-            />
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block"><span className="text-red-500">*</span> BU</label>
+              <select
+                value={formData.bu}
+                onChange={(e) => setFormData(prev => ({ ...prev, bu: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                {buOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block"><span className="text-red-500">*</span> 集团客户名称</label>
+              <select
+                value={formData.customerGroup}
+                onChange={(e) => setFormData(prev => ({ ...prev, customerGroup: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {customerGroups.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">产品ID</label>
+              <select
+                value={formData.productId}
+                onChange={(e) => setFormData(prev => ({ ...prev, productId: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {productIds.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">领域</label>
+              <input
+                type="text"
+                placeholder="请输入"
+                value={formData.domain}
+                onChange={(e) => setFormData(prev => ({ ...prev, domain: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block"><span className="text-red-500">*</span> Model Name</label>
+              <select
+                value={formData.modelName}
+                onChange={(e) => setFormData(prev => ({ ...prev, modelName: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {modelNames.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block"><span className="text-red-500">*</span> 对外版本号</label>
+              <select
+                value={formData.extVersion}
+                onChange={(e) => setFormData(prev => ({ ...prev, extVersion: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {extVersions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">Product ID</label>
+              <select
+                value={formData.productIdCode}
+                onChange={(e) => setFormData(prev => ({ ...prev, productIdCode: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {productIds.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">SAP工厂</label>
+              <select
+                value={formData.sapFactory}
+                onChange={(e) => setFormData(prev => ({ ...prev, sapFactory: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none"
+              >
+                <option value="">请选择</option>
+                {sapFactories.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
           </div>
-
-          <div className="space-y-6">
-            {MONTHS.map(m => {
-              const monthlyTotal = m.weeks.reduce((sum, w) => sum + (formData.volumes[`${m.name}-${w}`] || 0), 0);
-              return (
-                <div key={m.name} className="p-4 bg-gray-50 rounded-xl border border-gray-200 relative overflow-hidden">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-1.5 h-4 bg-blue-500 rounded-full" />
-                      <h3 className="text-xs font-bold text-gray-700">{m.name} 预测数量</h3>
-                    </div>
-                    <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-100/50 rounded-lg">
-                      <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">月度汇总:</span>
-                      <span className="text-xs font-black text-blue-700">{monthlyTotal}</span>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
-                    {m.weeks.map(w => (
-                      <div key={w} className="flex flex-col gap-1">
-                        <span className="text-[10px] text-gray-500 font-medium whitespace-pre-wrap leading-tight">{w}</span>
-                        <input 
-                          type="number" 
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-center text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all shadow-sm"
-                          placeholder="0"
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setFormData(prev => ({
-                              ...prev,
-                              volumes: { ...prev.volumes, [`${m.name}-${w}`]: val }
-                            }));
-                          }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="w-1/2 pr-3">
+            <label className="text-xs text-gray-500 mb-1.5 block">VMI库位</label>
+            <input
+              type="text"
+              placeholder="请输入"
+              value={formData.vmiLocation}
+              onChange={(e) => setFormData(prev => ({ ...prev, vmiLocation: e.target.value }))}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
           </div>
         </div>
 
         <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-          <button 
+          <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
+            className="px-5 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
           >
-            取消
+            关闭
           </button>
-          <button 
+          <button
             onClick={() => onAdd(formData)}
-            disabled={!formData.customer || !formData.model}
-            className="px-8 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 disabled:bg-gray-300 disabled:shadow-none disabled:cursor-not-allowed"
+            disabled={!formData.customerGroup || !formData.modelName || !formData.extVersion}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold shadow-md hover:bg-blue-700 transition-all active:scale-95 disabled:bg-gray-300 disabled:shadow-none disabled:cursor-not-allowed"
           >
-            确认添加
+            提交
           </button>
         </div>
       </motion.div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -1171,6 +1486,78 @@ const generateMNTData = (): ForecastRow[] => {
   return rows;
 };
 
+const generateNBData = (): ForecastRow[] => {
+  const customers = [
+    { name: 'Dell', techs: ['VA', 'HFS'] },
+    { name: 'HP', techs: ['VA', 'HFS'] },
+    { name: '联想', techs: ['VA', 'HFS'] },
+    { name: '华硕', techs: ['VA'] },
+  ];
+  const models: Record<string, string[]> = {
+    'VA': ['VA-Model A', 'VA-Model B'],
+    'HFS': ['HFS-Model A', 'HFS-Model B'],
+  };
+  const items: DataItemType[] = ['客户FCST', 'AI预测', '销售FCST (ETD)', 'ExtraSales', '需求计划', 'ExtraUnmet'];
+  const rows: ForecastRow[] = [];
+
+  customers.forEach(c => {
+    c.techs.forEach(tech => {
+      items.forEach(item => {
+        const values: Record<string, number> = {};
+        const prevValues: Record<string, number> = {};
+        const isAnomaly: Record<string, boolean> = {};
+        const baseValue = c.name === 'Dell' ? 300 : c.name === 'HP' ? 250 : c.name === '联想' ? 200 : 150;
+        MONTHS.forEach(m => {
+          m.weeks.forEach(w => {
+            const key = `${m.name}-${w}`;
+            const val = (item as string) === 'ExtraSales' ? 0 : (m.name === 'M2604' || m.name === 'M2605' || m.name === 'M2606') ? baseValue * 4 : baseValue + Math.floor(Math.random() * 50);
+            values[key] = val;
+            prevValues[key] = val;
+          });
+        });
+        rows.push({
+          id: `NB-${c.name}-${tech}-Total-${item}`,
+          customer: c.name,
+          version: 'P260329-04-002',
+          tech,
+          size: tech,
+          specs: tech === 'VA' ? 'VA Panel, 60Hz, sRGB 99%' : 'HFS Panel, 144Hz, DCI-P3 95%',
+          item,
+          values, prevValues, isAnomaly, reasons: {}, tags: {},
+        });
+      });
+      models[tech]?.forEach(model => {
+        items.forEach(item => {
+          const values: Record<string, number> = {};
+          const prevValues: Record<string, number> = {};
+          const isAnomaly: Record<string, boolean> = {};
+          const baseValue = Math.floor((c.name === 'Dell' ? 300 : c.name === 'HP' ? 250 : c.name === '联想' ? 200 : 150) / 2);
+          MONTHS.forEach(m => {
+            m.weeks.forEach(w => {
+              const key = `${m.name}-${w}`;
+              const val = (item as string) === 'ExtraSales' ? 0 : (m.name === 'M2604' || m.name === 'M2605' || m.name === 'M2606') ? baseValue * 4 : baseValue + Math.floor(Math.random() * 30);
+              values[key] = val;
+              prevValues[key] = val;
+            });
+          });
+          rows.push({
+            id: `NB-${c.name}-${tech}-${model}-${item}`,
+            customer: c.name,
+            version: 'P260329-04-002',
+            tech,
+            size: tech,
+            model,
+            specs: tech === 'VA' ? 'VA Panel, 60Hz' : 'HFS Panel, 144Hz',
+            item,
+            values, prevValues, isAnomaly, reasons: {}, tags: {},
+          });
+        });
+      });
+    });
+  });
+  return rows;
+};
+
 // --- Components ---
 
 // AIPredictionTooltip imported from ./components/tooltips/AIPredictionTooltip
@@ -1315,7 +1702,8 @@ const EditableCell = ({
       generateAnomalyReasoning(
         startRowId?.split('-')[0] || '客户',
         startRowId?.split('-')[1] || '',
-        startColumnKey?.split('-')[0] || '',
+        startColumnKey || '',
+        startRowId || '',
         value,
         oldValue || value,
         violatedRules || [],
@@ -1325,6 +1713,8 @@ const EditableCell = ({
         setLlmReasoning(text);
         setIsLoadingLlm(false);
         llmReasoningCache.set(cacheKey, text);
+      }).catch(() => {
+        setIsLoadingLlm(false);
       });
     }
   }, [showPopup, hasAnomalyPopup]);
@@ -1431,9 +1821,9 @@ const EditableCell = ({
       )}
 
       {/* 异常归因弹窗 (click-triggered, with DeepSeek reasoning) */}
-      {showPopup && hasAnomalyPopup && !specialRuleData && !isAIPrediction && (
+      {showPopup && hasAnomalyPopup && !specialRuleData && !isAIPrediction && createPortal(
         <div
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); setShowPopup(false); }}
           className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/20"
         >
           <div
@@ -1483,7 +1873,8 @@ const EditableCell = ({
               />
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* 普通修改 Tooltip (hover, 非异常非AI预测) */}
@@ -2004,7 +2395,7 @@ const ForecastChangeTable = ({
                               prevValue={isFirstWeek ? row.values[key] : (row.prevValues?.[key] ?? row.values[key])} 
                               aiSummary={row.aiSummaries?.[key]}
                               violatedRules={row.violatedRules?.[key]}
-                              isAnomaly={row.isAnomaly[key]}
+                              isAnomaly={row.isAnomaly?.[key]}
                             />
                           </td>
                         );
@@ -2035,7 +2426,7 @@ const ForecastChangeTable = ({
                             prevValue={row.prevValues?.[key] ?? row.values[key]} 
                             aiSummary={row.aiSummaries?.[key]}
                             violatedRules={row.violatedRules?.[key]}
-                            isAnomaly={row.isAnomaly[key]}
+                            isAnomaly={row.isAnomaly?.[key]}
                           />
                         </td>
                       );
@@ -2119,7 +2510,7 @@ const ForecastChangeTable = ({
                                   prevValue={isFirstWeek ? row.values[key] : (row.prevValues?.[key] ?? row.values[key])} 
                                   aiSummary={row.aiSummaries?.[key]}
                                   violatedRules={row.violatedRules?.[key]}
-                                  isAnomaly={row.isAnomaly[key]}
+                                  isAnomaly={row.isAnomaly?.[key]}
                                 />
                               </td>
                             );
@@ -2150,7 +2541,7 @@ const ForecastChangeTable = ({
                                 prevValue={row.prevValues?.[key] ?? row.values[key]} 
                                 aiSummary={row.aiSummaries?.[key]}
                                 violatedRules={row.violatedRules?.[key]}
-                                isAnomaly={row.isAnomaly[key]}
+                                isAnomaly={row.isAnomaly?.[key]}
                               />
                             </td>
                           );
@@ -2201,7 +2592,7 @@ const ForecastChangeTable = ({
   );
 };
 
-const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[], onAction?: (text: string) => void }) => {
+const DPAdjustmentTable = ({ data: initialData, onAction, columnLabel = '尺寸/model', title = '本周DP' }: { data: ForecastRow[], onAction?: (text: string) => void, columnLabel?: string, title?: string }) => {
   const [data, setData] = useState(initialData);
   const [filteredData, setFilteredData] = useState(initialData);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -2405,7 +2796,7 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
   return (
     <div className="flex flex-col w-full max-w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm mt-4">
       <div className="p-4 border-b border-gray-100 bg-[#f8faff] flex justify-between items-center">
-        <h3 className="text-sm font-bold text-gray-800">DP & 销售预测调整</h3>
+        <h3 className="text-sm font-bold text-gray-800">{title}</h3>
         <div className="flex gap-2">
           <input 
             type="file" 
@@ -2436,7 +2827,7 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
           <thead className="bg-[#f8faff] sticky top-0 z-20">
             <tr>
               <th rowSpan={2} className="border border-gray-200 p-2 min-w-[70px] font-bold text-gray-700 bg-[#f8faff]">集团客户名称</th>
-              <th rowSpan={2} className="border border-gray-200 p-2 min-w-[80px] font-bold text-gray-700 bg-[#f8faff]">尺寸/model</th>
+              <th rowSpan={2} className="border border-gray-200 p-2 min-w-[80px] font-bold text-gray-700 bg-[#f8faff]">{columnLabel}</th>
               <th rowSpan={2} className="border border-gray-200 p-2 min-w-[150px] font-bold text-gray-700 bg-[#f8faff]">规格描述</th>
               <th rowSpan={2} className="border border-gray-200 p-2 min-w-[110px] font-bold text-gray-700 bg-[#f8faff]">数据项</th>
               {MONTHS.map(m => (
@@ -2572,14 +2963,14 @@ const DPAdjustmentTable = ({ data: initialData, onAction }: { data: ForecastRow[
                           return (
                             <td key={key} className={`border border-gray-200 p-0 h-8 ${!canEdit ? 'bg-gray-100/30 text-gray-400' : 'bg-white/50'}`}>
                               {canEdit ? (
-                                <EditableCell 
-                                  value={rowData.values[key] || 0} 
+                                <EditableCell
+                                  value={rowData.values[key] || 0}
                                   isEditable={true}
                                   onSave={(val) => handleValueChange(rowData.id, key, val)}
                                   startRowId={rowData.id}
                                   startColumnKey={key}
-                                  isAnomaly={rowData.isAnomaly[key]}
-                                  isAIPrediction={row.item === 'AI预测'}
+                                  isAnomaly={rowData.isAnomaly?.[key]}
+                                  isAIPrediction={rowData.item === 'AI预测'}
                                   specialRuleData={rowData.specialRuleData?.[key]}
                                   allowModificationMarker={rowData.item === '销售FCST (ETD)' || rowData.item === 'ExtraSales'}
                                 />
@@ -3529,17 +3920,18 @@ const SimulationResultView = ({ onCheckVersion }: { onCheckVersion?: (version: s
 
   // Data based on user request analysis
   const data = [
-    { metric: 'VS 供应BP', v1: 150, v2: -850, v3: 2100 },
-    { metric: '收入', v1: -34000, v2: 56700, v3: -12800 },
-    { metric: '利润', v1: 3200, v2: -4700, v3: 1500 },
-    { metric: 'KPI产品', v1: -3, v2: 8, v3: -1 },
-    { metric: '成品库存', v1: 450, v2: -120, v3: 780 },
-    { metric: '净收入', v1: -28300, v2: 52100, v3: -9500 },
-    { metric: '重点产品', v1: 15, v2: -5, v3: 4 },
-    { metric: '库存', v1: 1250, v2: -340, v3: 680 },
-    { metric: '销量BP/RP', v1: -18, v2: 25, v3: -7 },
-    { metric: '供应BP/RP', v1: 10, v2: -9, v3: 22 },
+    { bu: 'TV', metric: 'VS 供应BP', v1: 150, v2: -850, v3: 2100 },
+    { bu: 'TV', metric: '收入', v1: -34000, v2: 56700, v3: -12800 },
+    { bu: 'TV', metric: '利润', v1: 3200, v2: -4700, v3: 1500 },
+    { bu: 'TV', metric: 'KPI产品', v1: -3, v2: 8, v3: -1 },
+    { bu: 'TV', metric: '成品库存', v1: 450, v2: -120, v3: 780 },
+    { bu: 'MNT', metric: '净收入', v1: -28300, v2: 52100, v3: -9500 },
+    { bu: 'MNT', metric: '重点产品', v1: 15, v2: -5, v3: 4 },
+    { bu: 'MNT', metric: '库存', v1: 1250, v2: -340, v3: 680 },
+    { bu: '车载', metric: '销量BP/RP', v1: -18, v2: 25, v3: -7 },
+    { bu: '车载', metric: '供应BP/RP', v1: 10, v2: -9, v3: 22 },
   ];
+  const buGroups = [{ name: 'TV', span: 5 }, { name: 'MNT', span: 3 }, { name: '车载', span: 2 }];
 
   return (
     <div className="w-full bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -3553,6 +3945,7 @@ const SimulationResultView = ({ onCheckVersion }: { onCheckVersion?: (version: s
         <table className="w-full border-collapse text-[11px]">
           <thead>
             <tr className="bg-gray-100">
+              <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">应用别</th>
               <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">指标</th>
               <th className="border border-gray-200 p-2 text-center font-bold text-gray-700 bg-blue-50/50">P260329-04-001 (当前)</th>
               <th className="border border-gray-200 p-2 text-center font-bold text-gray-700 bg-yellow-50/30">
@@ -3567,8 +3960,13 @@ const SimulationResultView = ({ onCheckVersion }: { onCheckVersion?: (version: s
           <tbody>
             {data.map((row, idx) => {
               const isVSBP = row.metric === 'VS 供应BP';
+              const buGroup = buGroups.find(g => g.name === row.bu);
+              const isFirstInGroup = idx === 0 || data[idx - 1].bu !== row.bu;
               return (
                 <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                  {isFirstInGroup && (
+                    <td rowSpan={buGroup?.span} className="border border-gray-200 p-2 font-bold text-gray-700 text-center bg-white align-middle">{row.bu}</td>
+                  )}
                   <td className="border border-gray-200 p-2 font-medium text-gray-700 bg-gray-50/30">{row.metric}</td>
                   <td className={`border border-gray-200 p-2 text-right font-bold ${row.v1 > 0 ? 'text-green-600' : row.v1 < 0 ? 'text-red-600' : ''}`}>
                     {isVSBP ? (
@@ -4716,9 +5114,9 @@ const ForecastTable = ({
                           <EditableCell 
                             value={row.values[key]} 
                             isEditable={false}
-                            isAnomaly={row.isAnomaly[key]}
-                            reason={row.reasons[key]}
-                            tag={row.tags[key]}
+                            isAnomaly={row.isAnomaly?.[key]}
+                            reason={row.reasons?.[key]}
+                            tag={row.tags?.[key]}
                             aiSummary={row.aiSummaries?.[key]}
                             violatedRules={row.violatedRules?.[key]}
                             isAIPrediction={row.item === 'AI预测'}
@@ -4807,9 +5205,9 @@ const ForecastTable = ({
                               <EditableCell 
                                 value={row.values[key]} 
                                 isEditable={isEditable}
-                                isAnomaly={row.isAnomaly[key]}
-                                reason={row.reasons[key]}
-                                tag={row.tags[key]}
+                                isAnomaly={row.isAnomaly?.[key]}
+                                reason={row.reasons?.[key]}
+                                tag={row.tags?.[key]}
                                 aiSummary={row.aiSummaries?.[key]}
                                 violatedRules={row.violatedRules?.[key]}
                                 isAIPrediction={row.item === 'AI预测'}
@@ -4871,235 +5269,233 @@ const ForecastTable = ({
         onConfirm={handleBatchConfirm}
       />
 
-      <AddDataModal 
-        isOpen={isAddModalOpen} 
-        onClose={() => setIsAddModalOpen(false)} 
+      <AddDataModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
         onAdd={(newData) => {
-          console.log('Adding new data:', newData);
+          const newRow: ForecastRow = {
+            id: `new-${Date.now()}`,
+            customer: newData.customerGroup || '新增客户',
+            size: '55',
+            model: newData.modelName || 'New Model',
+            item: '客户FCST',
+            specs: '',
+            version: newData.extVersion || '1.0',
+            values: {},
+            isAnomaly: {},
+            aiSummaries: {},
+            violatedRules: {}
+          };
+          setFilteredData(prev => [newRow, ...prev]);
           setIsAddModalOpen(false);
-        }} 
+        }}
       />
     </div>
   );
 };
 
-const AnomalyRulesTable = ({ rules, onToggle, onEdit }: { rules: AnomalyRule[], onToggle: (id: string) => void, onEdit: (rule: AnomalyRule) => void }) => {
+const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: AnomalyRuleRow[], onToggle: (rowId: string) => void, onEdit: (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => void, defaultBU?: string }) => {
+  const [filterBU, setFilterBU] = useState<string>(defaultBU || '');
+  const [filterScene, setFilterScene] = useState<string>('');
+
+  useEffect(() => {
+    if (defaultBU) setFilterBU(defaultBU);
+  }, [defaultBU]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter(row => {
+      if (filterBU && row.bu !== filterBU) return false;
+      if (filterScene && !row.scenes.includes(filterScene as AnomalyScene)) return false;
+      return true;
+    });
+  }, [rows, filterBU, filterScene]);
+
   return (
-    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
-      <table className="w-full border-collapse text-xs">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">是否启用</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">规则名称</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">维度</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">时间粒度</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">规则特有参数</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">适用范围</th>
-            <th className="border border-gray-200 p-2 text-left font-bold text-gray-700">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rules.map((rule) => (
-            <tr key={rule.id} className="hover:bg-gray-50 transition-colors">
-              <td className="border border-gray-200 p-2 text-center">
-                <div className="flex justify-center">
-                  <button 
-                    onClick={() => onToggle(rule.id)}
-                    className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${rule.isEnabled ? 'bg-green-500 border-green-600 text-white' : 'bg-white border-gray-300 hover:border-gray-400'}`}
-                  >
-                    {rule.isEnabled && <Check size={14} strokeWidth={3} />}
-                  </button>
-                </div>
-              </td>
-              <td className="border border-gray-200 p-2 text-gray-800">{rule.name}</td>
-              <td className="border border-gray-200 p-2 text-gray-800">{rule.dimension}</td>
-              <td className="border border-gray-200 p-2 text-gray-800">{rule.timeGranularity}</td>
-              <td className="border border-gray-200 p-2 text-gray-800">{rule.parameters}</td>
-              <td className="border border-gray-200 p-2 text-gray-800">{rule.scope}</td>
-              <td className="border border-gray-200 p-2">
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => onEdit(rule)}
-                    className="text-blue-600 hover:text-blue-700 font-medium underline underline-offset-2"
-                  >
-                    修改
-                  </button>
-                </div>
-              </td>
+    <div className="w-full">
+      <div className="flex items-center gap-3 mb-3">
+        <select value={filterBU} onChange={e => setFilterBU(e.target.value)} className="h-8 px-3 border border-gray-200 rounded-md text-xs bg-white text-gray-700 outline-none focus:border-blue-500">
+          <option value="">全部BU</option>
+          {BU_ALL.map(bu => <option key={bu} value={bu}>{bu}</option>)}
+        </select>
+        <select value={filterScene} onChange={e => setFilterScene(e.target.value)} className="h-8 px-3 border border-gray-200 rounded-md text-xs bg-white text-gray-700 outline-none focus:border-blue-500">
+          <option value="">全部场景</option>
+          <option value="客户FCST分析">客户FCST分析</option>
+          <option value="销售FCST分析">销售FCST分析</option>
+          <option value="DP分析">DP分析</option>
+        </select>
+        <span className="text-[11px] text-gray-400">显示 {filteredRows.length} / {rows.length} 条</span>
+      </div>
+      <div className="w-full overflow-x-auto bg-white rounded-xl shadow-sm border border-gray-100">
+        <table className="w-full text-xs border-collapse min-w-[1000px]">
+          <thead>
+            <tr className="bg-gray-50/80">
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:50}}>启用</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:150}}>规则名称</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:160}}>维度</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:90}}>时间粒度</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:140}}>场景</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:130}}>规则特有参数</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:70}}>适用BU</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:50}}>操作</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filteredRows.map((row, idx) => {
+              const isGroupFirst = idx === 0 || filteredRows[idx - 1].ruleId !== row.ruleId;
+              const buStyle = BU_TAG_STYLES[row.bu];
+              return (
+                <tr key={row.id} className={`hover:bg-blue-50/30 transition-colors ${isGroupFirst ? 'border-t border-gray-200' : ''}`}>
+                  <td className="p-2.5 border-b border-gray-50">
+                    <button
+                      onClick={() => onToggle(row.id)}
+                      className={`relative w-9 h-5 rounded-full transition-colors ${row.isEnabled ? 'bg-blue-500' : 'bg-gray-300'}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${row.isEnabled ? 'right-0.5' : 'left-0.5'}`} />
+                    </button>
+                  </td>
+                  <td className="p-2.5 border-b border-gray-50 text-gray-800">{row.name}</td>
+                  <td className="p-2.5 border-b border-gray-50 text-gray-700">{row.dimension}</td>
+                  <td className="p-2.5 border-b border-gray-50 text-gray-700">{row.timeGranularity}</td>
+                  <td className="p-2.5 border-b border-gray-50">
+                    <div className="flex flex-wrap gap-1">
+                      {row.scenes.map(s => (
+                        <span key={s} className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] whitespace-nowrap">{s}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="p-2.5 border-b border-gray-50 text-gray-600">{row.parameterSummary}</td>
+                  <td className="p-2.5 border-b border-gray-50">
+                    <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${buStyle.bg} ${buStyle.text}`}>{row.bu}</span>
+                  </td>
+                  <td className="p-2.5 border-b border-gray-50">
+                    <button onClick={() => onEdit(row.ruleId, row.bu, row.dimension, row.timeGranularity)} className="text-blue-600 hover:text-blue-500 font-medium text-xs">修改</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
 
-const RuleEditModal = ({ rule, onClose, onSave }: { rule: AnomalyRule, onClose: () => void, onSave: (updatedRule: AnomalyRule) => void }) => {
-  const [dimensions, setDimensions] = useState(['客户', '尺寸', 'model']);
-  const [granularities, setGranularities] = useState([
-    { label: '周', threshold: '0%', checked: false },
-    { label: '月', threshold: '5%', checked: true },
-    { label: '季', threshold: '10%', checked: true },
-    { label: '年', threshold: '15%', checked: true },
-  ]);
-  const [scope, setScope] = useState('TV');
+const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, onClose, onSave }: {
+  isOpen: boolean; ruleId: string | null; bu: AnomalyBU | null; dimension: string | null; timeGranularity: string | null;
+  onClose: () => void; onSave: (ruleId: string, values: Record<string, number>) => void;
+}) => {
+  const [thresholdValues, setThresholdValues] = useState<Record<string, number>>({});
+  const definition = ANOMALY_RULE_DEFINITIONS.find(d => d.id === ruleId);
 
-  const allDimensions = ['客户', '尺寸', 'model', '技术别', '面板厂', '大板'];
-  const allScopes = ['全部', 'TV', 'CID', 'MNT', '平板', 'NB', '车载', 'MB'];
+  useEffect(() => {
+    if (definition) {
+      const defaults: Record<string, number> = {};
+      definition.drawerConfig.thresholds?.forEach(group => {
+        group.inputs?.forEach(inp => { defaults[inp.id] = inp.defaultValue; });
+        group.conditions?.forEach(cond => { cond.inputs.forEach(inp => { defaults[inp.id] = inp.defaultValue; }); });
+      });
+      setThresholdValues(defaults);
+    }
+  }, [ruleId]);
 
-  const toggleDimension = (dim: string) => {
-    setDimensions(prev => prev.includes(dim) ? prev.filter(d => d !== dim) : [...prev, dim]);
-  };
+  if (!isOpen || !definition) return null;
 
-  const toggleGranularity = (idx: number) => {
-    setGranularities(prev => prev.map((g, i) => i === idx ? { ...g, checked: !g.checked } : g));
-  };
+  const { drawerConfig } = definition;
 
-  const handleSave = () => {
-    onSave({
-      ...rule,
-      dimension: dimensions.join('+'),
-      timeGranularity: granularities.filter(g => g.checked).map(g => g.label).join('+'),
-      parameters: granularities.filter(g => g.checked).map(g => `${g.label}${g.threshold}`).join('、'),
-      scope: `BU：${scope}`
-    });
-  };
+  const renderThresholdRow = (input: ThresholdInput) => (
+    <div key={input.id} className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
+      <span className="text-[13px] text-gray-700 w-[120px] shrink-0 font-medium">{input.label}</span>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[13px] text-gray-500">{input.prefix}</span>
+        <input
+          type="number"
+          value={thresholdValues[input.id] ?? input.defaultValue}
+          onChange={e => setThresholdValues(prev => ({ ...prev, [input.id]: Number(e.target.value) }))}
+          className="w-[80px] h-9 border border-gray-200 rounded-md px-3 text-sm text-center outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all"
+        />
+        <span className="text-[13px] text-gray-500">{input.suffix}</span>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+    <>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/30 z-[100]" onClick={onClose}
+      />
+      <motion.div
+        initial={{ x: 560 }} animate={{ x: 0 }} exit={{ x: 560 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+        className="fixed top-0 right-0 w-[560px] h-full bg-white z-[200] flex flex-col shadow-[-4px_0_24px_rgba(0,0,0,0.1)]"
       >
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-          <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-            <Edit2 size={18} className="text-blue-600" />
-            修改异常规则: {rule.name}
-          </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-            <X size={20} />
+        <div className="px-7 py-5 border-b border-gray-100 flex items-center justify-between shrink-0">
+          <h2 className="text-lg font-semibold text-gray-900">{drawerConfig.title}</h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-md bg-gray-100 hover:bg-gray-200 transition-colors">
+            <X size={16} className="text-gray-500" />
           </button>
         </div>
 
-        <div className="p-6 overflow-y-auto space-y-8">
-          {/* Statistical Dimension */}
-          <section>
-            <h4 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
-              <span className="w-1 h-4 bg-blue-500 rounded-full"></span>
-              统计维度 (多选)
-            </h4>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-              {allDimensions.map(dim => (
-                <button
-                  key={dim}
-                  onClick={() => toggleDimension(dim)}
-                  className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all flex items-center justify-center gap-1.5
-                    ${dimensions.includes(dim) 
-                      ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' 
-                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
-                >
-                  <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors
-                    ${dimensions.includes(dim) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300'}`}>
-                    {dimensions.includes(dim) && <Check size={10} strokeWidth={4} />}
-                  </div>
-                  {dim}
-                </button>
-              ))}
+        <div className="flex-1 overflow-y-auto px-7 py-6">
+          <div className="mb-6">
+            <div className="text-sm font-semibold text-gray-800 mb-3">规则信息</div>
+            <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 space-y-2">
+              <div className="flex"><span className="w-20 text-[13px] text-gray-400 shrink-0">适用BU</span><span className="text-[13px] text-gray-700">{bu}</span></div>
+              <div className="flex"><span className="w-20 text-[13px] text-gray-400 shrink-0">对比维度</span><span className="text-[13px] text-gray-700">{dimension}</span></div>
+              <div className="flex"><span className="w-20 text-[13px] text-gray-400 shrink-0">时间粒度</span><span className="text-[13px] text-gray-700">{timeGranularity}</span></div>
             </div>
-          </section>
+          </div>
 
-          {/* Time Granularity and Threshold */}
-          <section>
-            <h4 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
-              <span className="w-1 h-4 bg-blue-500 rounded-full"></span>
-              时间粒度及阈值勾选
-            </h4>
-            <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="p-3 text-center w-16 font-bold text-gray-600">勾选</th>
-                    <th className="p-3 text-left font-bold text-gray-600">时间粒度</th>
-                    <th className="p-3 text-left font-bold text-gray-600">阈值</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {granularities.map((g, idx) => (
-                    <tr key={g.label} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="p-3 text-center">
-                        <button 
-                          onClick={() => toggleGranularity(idx)}
-                          className={`mx-auto w-5 h-5 rounded border flex items-center justify-center transition-colors
-                            ${g.checked ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 hover:border-gray-400'}`}
-                        >
-                          {g.checked && <Check size={12} strokeWidth={3} />}
-                        </button>
-                      </td>
-                      <td className="p-3 font-medium text-gray-700">{g.label}</td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <input 
-                            type="text" 
-                            value={g.threshold} 
-                            onChange={(e) => {
-                              const newVal = e.target.value;
-                              setGranularities(prev => prev.map((item, i) => i === idx ? { ...item, threshold: newVal } : item));
-                            }}
-                            className="w-20 px-2 py-1 border border-gray-200 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
+          {drawerConfig.fixedRules && drawerConfig.fixedRules.length > 0 && (
+            <>
+              <div className="h-px bg-gray-100 my-6" />
+              <div className="mb-6">
+                <div className="text-sm font-semibold text-gray-800 mb-3">固定规则</div>
+                {drawerConfig.fixedRules.map((text, i) => (
+                  <div key={i} className="p-3 bg-gray-50 rounded-md border-l-[3px] border-gray-300 mb-2.5 text-[13px] text-gray-600 leading-relaxed">{text}</div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {drawerConfig.thresholds && drawerConfig.thresholds.length > 0 && (
+            <>
+              <div className="h-px bg-gray-100 my-6" />
+              <div>
+                <div className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                  阈值配置
+                  <span className="text-[11px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium">可修改</span>
+                </div>
+                {drawerConfig.thresholds.map((group, gi) => (
+                  <div key={gi} className="mb-5">
+                    <label className="block text-[13px] text-gray-600 font-medium mb-2">
+                      {group.title}{group.required && <span className="text-red-500 ml-0.5">*</span>}
+                    </label>
+                    {group.preHint && <p className="text-xs text-gray-400 mb-3">{group.preHint}</p>}
+                    {group.inputs && group.inputs.map(renderThresholdRow)}
+                    {group.conditions && group.conditions.map((cond, ci) => (
+                      <div key={ci}>
+                        {ci > 0 && <div className="flex items-center justify-center my-2 text-blue-600 text-xs font-medium">AND</div>}
+                        <div className="border border-gray-200 rounded-lg p-4 bg-gray-50/50 mb-2">
+                          <div className="text-xs text-gray-400 mb-2 font-medium">{cond.title}</div>
+                          {cond.inputs.map(renderThresholdRow)}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          {/* Scope */}
-          <section>
-            <h4 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
-              <span className="w-1 h-4 bg-blue-500 rounded-full"></span>
-              适用范围 (单选)
-            </h4>
-            <div className="flex flex-wrap gap-3">
-              {allScopes.map(s => (
-                <button
-                  key={s}
-                  onClick={() => setScope(s)}
-                  className={`px-4 py-2 rounded-full text-xs font-medium border transition-all flex items-center gap-2
-                    ${scope === s 
-                      ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-100' 
-                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
-                >
-                  <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center
-                    ${scope === s ? 'border-white' : 'border-gray-300'}`}>
-                    {scope === s && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                      </div>
+                    ))}
+                    {group.hint && <p className="text-xs text-gray-400 mt-2">{group.hint}</p>}
                   </div>
-                  {s}
-                </button>
-              ))}
-            </div>
-          </section>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex justify-end gap-3">
-          <button 
-            onClick={onClose}
-            className="px-6 py-2 rounded-xl text-sm font-bold text-gray-500 hover:bg-gray-100 transition-all active:scale-95"
-          >
-            取消
-          </button>
-          <button 
-            onClick={handleSave}
-            className="px-8 py-2 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all active:scale-95"
-          >
-            确认修改
-          </button>
+        <div className="px-7 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+          <button onClick={onClose} className="h-9 px-5 rounded-md text-sm text-gray-600 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 transition-all">取消</button>
+          <button onClick={() => { if (ruleId) onSave(ruleId, thresholdValues); }} className="h-9 px-5 rounded-md text-sm text-white bg-blue-600 hover:bg-blue-700 transition-all font-medium">保存</button>
         </div>
       </motion.div>
-    </div>
+    </>
   );
 };
 
@@ -5209,7 +5605,7 @@ const RetrospectiveReport = () => {
                 <tr className="bg-blue-600 text-white">
                   <th className="py-2 px-2 text-left font-medium">客户</th>
                   <th className="py-2 px-2 text-left font-medium">Model</th>
-                  <th className="py-2 px-2 text-left font-medium">DP</th>
+                  <th className="py-2 px-2 text-left font-medium">销售FCST</th>
                   <th className="py-2 px-2 text-left font-medium">AI预测</th>
                   <th className="py-2 px-2 text-left font-medium">实际发货</th>
                   <th className="py-2 px-2 text-left font-medium">销售偏差率</th>
@@ -5265,6 +5661,220 @@ const RetrospectiveReport = () => {
   );
 };
 
+const CustomerFCSTRawTable = () => {
+  const rawData = [
+    { id: 1, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '97.5', model: 'ST975AD04-1', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [6, 9, 9, 9, 6, 39, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 2, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '97.5', model: 'ST975AD05-2', extVersion: '2.2', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [1930, 3376, 3376, 3376, 2892, 14950, 226, 1580, 1580, 1580, 1580, 1580, 1580] },
+    { id: 3, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '97.5', model: 'ST975AD02-8', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [3195, 5591, 5591, 5591, 4790, 24758, 412, 2884, 2884, 2884, 2884, 2884, 2884] },
+    { id: 4, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '97.5', model: 'ST975AD03-2', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [805, 1408, 1408, 1408, 1203, 6232, 289, 2021, 2021, 2021, 2021, 2021, 2021] },
+    { id: 5, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '97.5', model: 'ST975AD03-3', extVersion: '1.0', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 6, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '114.5', model: 'STB451D01-1', extVersion: '2.4', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [38, 66, 66, 66, 54, 290, 5, 34, 34, 34, 34, 34, 34] },
+    { id: 7, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '114.5', model: 'STB45AD01-2', extVersion: '2.2', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 8, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '31.5', model: 'ST3151B07-1', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [32140, 56245, 56245, 56245, 48208, 249083, 6777, 47435, 47435, 47435, 47435, 47435, 47435] },
+    { id: 9, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '31.5', model: 'ST3151A07-5', extVersion: '2.2', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 10, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '42.5', model: 'ST4251B05-2', extVersion: '2.5', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [9559, 16727, 16727, 16727, 14336, 74076, 1294, 9054, 9054, 9054, 9054, 9054, 9054] },
+    { id: 11, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '42.5', model: 'ST425AB05-4', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 12, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '42.5', model: 'ST425AD02-7', extVersion: '2.1', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [1162, 2033, 2033, 2033, 1739, 9000, 0, 0, 0, 0, 0, 0, 0] },
+    { id: 13, version: '20260712215056566', customer: 'TCL品牌集团_TV', size: '54.6', model: 'ST5461D12-4', extVersion: '2.3', domain: '', shipFrom: '', customerPN: '', deliveryTo: '', offeringId: '', weeks: [17403, 30456, 30456, 30456, 26102, 134873, 4449, 31139, 31139, 31139, 31139, 31139, 31139] },
+  ];
+
+  const weekColumns = [
+    { key: 'wk27', label: 'WK27', sub: '260701-04' },
+    { key: 'wk28', label: 'WK28', sub: '260705-11' },
+    { key: 'wk29', label: 'WK29', sub: '260712-18' },
+    { key: 'wk30', label: 'WK30', sub: '260719-25' },
+    { key: 'wk31', label: 'WK31', sub: '260726-31' },
+    { key: 'm2607', label: 'M26-07', sub: '' },
+    { key: 'wk31b', label: 'WK31', sub: '260801-01' },
+    { key: 'wk32', label: 'WK32', sub: '260802-08' },
+    { key: 'wk33', label: 'WK33', sub: '260809-15' },
+    { key: 'wk34', label: 'WK34', sub: '260816-22' },
+    { key: 'wk35', label: 'WK35', sub: '260823-29' },
+    { key: 'wk36', label: 'WK36', sub: '260830-05' },
+    { key: 'm2608', label: 'M26-08', sub: '' },
+  ];
+
+  const [filters, setFilters] = useState({
+    version: '',
+    modelName: '',
+    customerGroup: '',
+    extVersion: '',
+    customerPN: '',
+    deliveryTo: '',
+    size: '',
+    periodStart: '202601',
+    periodEnd: '202712',
+  });
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-3 border-b border-gray-200">
+        <h2 className="text-base font-bold text-gray-800">客户FCST管理</h2>
+      </div>
+
+      {/* Filter Area */}
+      <div className="px-5 py-4 border-b border-gray-200 bg-gray-50/50">
+        <div className="grid grid-cols-5 gap-x-4 gap-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">版本<span className="text-red-500">*</span></span>
+            <input type="text" placeholder="请选择" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">Model Name</span>
+            <input type="text" placeholder="请输入" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">客户集团名称</span>
+            <select className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0 appearance-none">
+              <option value=""></option>
+              <option value="TCL品牌集团_TV">TCL品牌集团_TV</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">对外版次</span>
+            <input type="text" placeholder="请输入" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="flex items-center gap-2 justify-end">
+            <span className="text-xs text-gray-600 whitespace-nowrap">周期</span>
+            <input type="text" value="202601" className="w-16 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-center" readOnly />
+            <span className="text-xs text-gray-400">~</span>
+            <input type="text" value="202712" className="w-16 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-center" readOnly />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">客户PN</span>
+            <input type="text" placeholder="请输入" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">交付地点</span>
+            <input type="text" placeholder="请输入" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 whitespace-nowrap">尺寸</span>
+            <input type="text" placeholder="请输入" className="flex-1 text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-0" />
+          </div>
+          <div className="col-span-2 flex items-center justify-end gap-2">
+            <button className="px-5 py-1.5 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-700 transition-colors">搜 索</button>
+            <button className="px-5 py-1.5 bg-white text-gray-700 text-xs font-bold rounded border border-gray-300 hover:bg-gray-50 transition-colors">重 置</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-2 flex-wrap">
+        <button className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded flex items-center gap-1 hover:bg-blue-700">
+          <Plus size={12} /> 发布
+        </button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded flex items-center gap-1 hover:bg-gray-50">
+          <Edit2 size={12} /> 保存
+        </button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded flex items-center gap-1 hover:bg-gray-50">
+          <Download size={12} /> 导出
+        </button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">下载模板</button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">导入</button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">查看异常数据</button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">计划对象</button>
+        <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">日志</button>
+        <button className="px-3 py-1.5 bg-white text-blue-600 text-xs border border-blue-300 rounded hover:bg-blue-50 font-medium">扩展字段</button>
+        <span className="ml-auto text-xs text-gray-500">发布状态：未发布</span>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border-collapse min-w-[1800px]">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 sticky left-0 bg-gray-50 z-10 w-12">序号</th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[140px]">
+                <div className="flex items-center gap-1">版本号 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[120px]">
+                <div className="flex items-center gap-1">客户集团名称 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 w-16">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> 尺寸 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[110px]">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> Model Name <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 w-20">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> 对外版次 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 w-16">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> 领域 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[80px]">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> 发货地点 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[80px]">客户PN</th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[80px]">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> 交付地点 <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              <th className="px-3 py-2.5 text-left font-medium text-gray-600 border-r border-gray-100 min-w-[80px]">
+                <div className="flex items-center gap-1"><Edit2 size={10} className="text-gray-400" /> Offering ID <Edit2 size={10} className="text-gray-400" /></div>
+              </th>
+              {/* Month header spanning weeks */}
+              <th colSpan={5} className="px-1 py-1 text-center font-medium text-gray-600 border-r border-gray-200 border-b-0 bg-gray-50">
+                <div className="text-xs font-bold">2607</div>
+              </th>
+              <th className="px-1 py-1 text-center font-medium text-gray-600 border-r border-gray-200 bg-gray-50"></th>
+              <th colSpan={5} className="px-1 py-1 text-center font-medium text-gray-600 border-r border-gray-200 bg-gray-50">
+                <div className="text-xs font-bold">2608</div>
+              </th>
+              <th className="px-1 py-1 text-center font-medium text-gray-600 bg-gray-50"></th>
+            </tr>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="sticky left-0 bg-gray-50 z-10 border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              <th className="border-r border-gray-100"></th>
+              {weekColumns.map((col) => (
+                <th key={col.key} className="px-2 py-1.5 text-center font-medium text-gray-600 border-r border-gray-100 min-w-[80px]">
+                  <div className="flex items-center justify-center gap-0.5">
+                    <Edit2 size={9} className="text-gray-400" />
+                    <span className="font-bold">{col.label}</span>
+                  </div>
+                  {col.sub && <div className="text-[10px] text-gray-400 font-normal">{col.sub}</div>}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rawData.map((row) => (
+              <tr key={row.id} className="border-b border-gray-100 hover:bg-blue-50/30 transition-colors">
+                <td className="px-3 py-2.5 text-gray-500 sticky left-0 bg-white z-10 border-r border-gray-100">{row.id}</td>
+                <td className="px-3 py-2.5 text-gray-700 border-r border-gray-100 font-mono text-[10px]">{row.version}</td>
+                <td className="px-3 py-2.5 text-gray-700 border-r border-gray-100">{row.customer}</td>
+                <td className="px-3 py-2.5 text-gray-700 border-r border-gray-100 text-center">{row.size}</td>
+                <td className="px-3 py-2.5 text-gray-700 border-r border-gray-100 font-mono">{row.model}</td>
+                <td className="px-3 py-2.5 text-gray-700 border-r border-gray-100 text-center">{row.extVersion}</td>
+                <td className="px-3 py-2.5 text-gray-400 border-r border-gray-100">{row.domain}</td>
+                <td className="px-3 py-2.5 text-gray-400 border-r border-gray-100">{row.shipFrom}</td>
+                <td className="px-3 py-2.5 text-gray-400 border-r border-gray-100">{row.customerPN}</td>
+                <td className="px-3 py-2.5 text-gray-400 border-r border-gray-100">{row.deliveryTo}</td>
+                <td className="px-3 py-2.5 text-gray-400 border-r border-gray-100">{row.offeringId}</td>
+                {row.weeks.map((val, idx) => (
+                  <td key={idx} className={`px-2 py-2.5 text-right border-r border-gray-100 tabular-nums ${weekColumns[idx]?.label.startsWith('M') ? 'font-bold bg-gray-50/50' : ''}`}>
+                    {val.toLocaleString()}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', role: 'agent', content: '您好！我是您的需求感知/共识助手。有什么我可以帮您的？', type: 'text' }
@@ -5272,32 +5882,37 @@ export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [userRole, setUserRole] = useState<'sales' | 'director'>('sales');
+  const [userRole, setUserRole] = useState<'sales' | 'director' | 'sales-admin' | 'sales-admin-head'>('sales');
+  const [buType, setBuType] = useState<'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC'>('TV');
   const [forecastData, setForecastData] = useState<ForecastRow[]>([]);
   const [backupForecastData, setBackupForecastData] = useState<ForecastRow[] | null>(null);
-  const [anomalyRules, setAnomalyRules] = useState<AnomalyRule[]>([]);
-  const [editingRule, setEditingRule] = useState<AnomalyRule | null>(null);
+  const [anomalyRuleRows, setAnomalyRuleRows] = useState<AnomalyRuleRow[]>([]);
+  const [drawerState, setDrawerState] = useState<DrawerEditState>({ isOpen: false, ruleId: null, bu: null, dimension: null, timeGranularity: null });
+  const [savedThresholds, setSavedThresholds] = useState<Record<string, Record<string, number>>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const handleToggleRule = (id: string) => {
-    setAnomalyRules(prev => prev.map(rule => 
-      rule.id === id ? { ...rule, isEnabled: !rule.isEnabled } : rule
+  const handleToggleRule = (rowId: string) => {
+    setAnomalyRuleRows(prev => prev.map(row =>
+      row.id === rowId ? { ...row, isEnabled: !row.isEnabled } : row
     ));
   };
 
-  const handleEditRule = (rule: AnomalyRule) => {
-    setEditingRule(rule);
+  const handleEditRule = (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => {
+    setDrawerState({ isOpen: true, ruleId, bu, dimension, timeGranularity: time });
   };
 
-  const handleSaveRule = (updatedRule: AnomalyRule) => {
-    setAnomalyRules(prev => prev.map(rule => 
-      rule.id === updatedRule.id ? updatedRule : rule
-    ));
-    setEditingRule(null);
+  const handleSaveDrawer = (ruleId: string, values: Record<string, number>) => {
+    const bu = drawerState.bu;
+    if (bu) setSavedThresholds(prev => ({ ...prev, [`${ruleId}-${bu}`]: values }));
+    setDrawerState(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const handleCloseDrawer = () => {
+    setDrawerState(prev => ({ ...prev, isOpen: false }));
   };
 
   const processMessage = async (text: string) => {
@@ -5308,7 +5923,15 @@ export default function App() {
     // Simulate agent processing
     setTimeout(() => {
       setIsTyping(false);
-      if (text === '解释客户FCST变化识别') {
+      if (text === '查看客户原始fcst' || text === '查看客户原始FCST') {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '好的，为您展示客户原始FCST管理页面。您可以在此查看客户原始预测数据，支持按版本、Model Name、客户集团等条件筛选。',
+          type: 'customer-fcst-raw'
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      } else if (text === '解释客户FCST变化识别') {
         const data: RuleExplanationData = {
           ruleList: [
             {
@@ -5359,15 +5982,50 @@ export default function App() {
         setMessages(prev => [...prev, agentMsg]);
       } else if (text.includes('查看并调整DP')) {
         const initialData = generateInitialData();
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '好的，为您进入DP调整页面。在此视图下，您可以根据预测建议手动调整销售FCST及需求计划。点击尺寸旁的箭头可展开至具体 Model 维度级别进行微调。', 
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: `好的，为您进入${buType} DP调整页面。在此视图下，您可以根据预测建议手动调整销售FCST及需求计划。点击${buType === 'NB' || buType === 'MC' ? '技术别' : '尺寸'}旁的箭头可展开至具体 Model 维度级别进行微调。`,
           type: 'dp-table',
-          data: initialData
+          data: initialData,
+          buType: buType
         };
         setMessages(prev => [...prev, agentMsg]);
-      } else if (userRole === 'director' && (text.includes('调整MNT本周销售fcst') || text.includes('MNT本周') || text.includes('调整本周销售fcst') || text.includes('fcst')) && !text.startsWith('director-confirm:')) {
+      } else if (text === '确认查看本周DP') {
+        const initialData = generateInitialData();
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: `好的，为您展示${buType} 本周DP数据（只读模式）。`,
+          type: 'dp-table-readonly',
+          data: initialData,
+          buType: buType
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      } else if (text.includes('查看本周DP')) {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '您好，销管主管。请先选择您想查看的数据项，确认后为您展示对应数据。',
+          type: 'data-item-select-dp'
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      } else if (text === '确认查看本周销售fcst') {
+        const effectiveBu = buType;
+        if (effectiveBu === 'MNT') {
+          const mntData = generateMNTData();
+          const agentMsg: Message = { id: (Date.now() + 1).toString(), role: 'agent', content: '好的，为您展示MNT BU本周销售预测数据（只读模式）。', type: 'mnt-table', data: mntData };
+          setMessages(prev => [...prev, agentMsg]);
+        } else if (effectiveBu === 'NB' || effectiveBu === 'MC') {
+          const nbData = generateNBData();
+          const agentMsg: Message = { id: (Date.now() + 1).toString(), role: 'agent', content: `好的，为您展示${effectiveBu} BU本周销售预测数据（只读模式）。`, type: 'nb-table', data: nbData };
+          setMessages(prev => [...prev, agentMsg]);
+        } else {
+          const initialData = generateInitialData();
+          const agentMsg: Message = { id: (Date.now() + 1).toString(), role: 'agent', content: '好的，为您展示本周销售预测数据（只读模式）。', type: 'table-readonly', data: initialData };
+          setMessages(prev => [...prev, agentMsg]);
+        }
+      } else if (text.includes('查看本周销售fcst')) {
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
@@ -5375,9 +6033,17 @@ export default function App() {
           type: 'data-item-select'
         };
         setMessages(prev => [...prev, agentMsg]);
-      } else if (text.startsWith('director-confirm:') || (userRole !== 'director' && (text.includes('调整MNT本周销售fcst') || text.includes('MNT本周')))) {
-        const actualText = text.startsWith('director-confirm:') ? text.replace('director-confirm:', '') : text;
-        if (actualText.includes('MNT') || text.includes('MNT本周')) {
+      } else if ((userRole === 'director') && (text.includes('调整本周销售fcst') || text.includes('fcst')) && !text.startsWith('director-confirm:') && !text.startsWith('确认查看')) {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '您好，销售总监。请先选择您想查看的数据项，确认后为您展示对应数据。',
+          type: 'data-item-select'
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      } else if (text.includes('调整MNT本周销售fcst') || text.includes('MNT本周') || text.includes('调整本周销售fcst') || text.includes('fcst')) {
+        const effectiveBu = (text.includes('MNT') || text.includes('MNT本周')) ? 'MNT' : buType;
+        if (effectiveBu === 'MNT') {
           const mntData = generateMNTData();
           const agentMsg: Message = {
             id: (Date.now() + 1).toString(),
@@ -5385,6 +6051,16 @@ export default function App() {
             content: '好的，为您查询到MNT BU本周销售预测数据如下。您可以点击"尺寸-分辨率"旁的箭头展开查看刷新率维度，再次点击可展开至具体 ProductID 维度数据。',
             type: 'mnt-table',
             data: mntData
+          };
+          setMessages(prev => [...prev, agentMsg]);
+        } else if (effectiveBu === 'NB' || effectiveBu === 'MC') {
+          const nbData = generateNBData();
+          const agentMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'agent',
+            content: `好的，为您查询到${effectiveBu} BU本周销售预测数据如下。您可以点击"技术别"旁的箭头展开查看具体 Model 维度数据。`,
+            type: 'nb-table',
+            data: nbData
           };
           setMessages(prev => [...prev, agentMsg]);
         } else {
@@ -5399,17 +6075,6 @@ export default function App() {
           };
           setMessages(prev => [...prev, agentMsg]);
         }
-      } else if (text.includes('调整本周销售fcst') || text.includes('fcst')) {
-        const initialData = generateInitialData();
-        setForecastData(initialData);
-        const agentMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'agent',
-          content: '好的，为您查询到本周客户预测数据如下。您可以点击"尺寸"单元格旁的箭头展开查看具体的 Model 维度数据。',
-          type: 'table',
-          data: initialData
-        };
-        setMessages(prev => [...prev, agentMsg]);
       } else if (text === '提交修改') {
         const agentMsg: Message = { 
           id: (Date.now() + 1).toString(), 
@@ -5513,7 +6178,7 @@ export default function App() {
         const agentMsg: Message = { 
           id: (Date.now() + 1).toString(), 
           role: 'agent', 
-          content: '好的，为您进入模拟版 P260329-04-002 的 DP & 销售预测调整页面。在此视图下，您可以根据预测建议手动调整销售FCST及需求计划。点击尺寸旁的箭头可展开至具体 Model 维度级别进行微调。', 
+          content: '好的，为您进入模拟版 P260329-04-002 的本周DP页面。在此视图下，您可以根据预测建议手动调整销售FCST及需求计划。点击尺寸旁的箭头可展开至具体 Model 维度级别进行微调。', 
           type: 'dp-table',
           data: initialData
         };
@@ -5614,20 +6279,24 @@ export default function App() {
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text.includes('查询异常规则')) {
-        const rules: AnomalyRule[] = [
-          { id: '1', isEnabled: true, name: '客户FCST变化识别', dimension: '客户+尺寸+Model', timeGranularity: '周+月+季度', parameters: '月5%、季10%', scope: 'BU：TV' },
-          { id: '2', isEnabled: true, name: '客户FCST变化识别', dimension: '客户+技术别+尺寸+Model', timeGranularity: '周+月+季度', parameters: '月5%、季10%', scope: 'BU：MNT' },
-          { id: '3', isEnabled: true, name: '产品生命周期验证', dimension: 'Model', timeGranularity: '月', parameters: 'NPI阈值50%', scope: '全部' },
-          { id: '4', isEnabled: true, name: '需求供应对比', dimension: '客户+尺寸', timeGranularity: '月', parameters: '月10%', scope: 'BU：TV' },
-          { id: '5', isEnabled: true, name: '需求供应对比', dimension: '客户+技术别', timeGranularity: '月', parameters: '月10%', scope: 'BU：MNT' },
-        ];
-        setAnomalyRules(rules);
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '为您查询到当前的异常识别规则如下：', 
+        const rows: AnomalyRuleRow[] = [];
+        ANOMALY_RULE_DEFINITIONS.forEach(def => {
+          def.applicableBUs.forEach(bu => {
+            const dim = (bu === 'TV' || bu === 'CID') ? def.dimTV : (bu === 'MNT' || bu === 'NB') ? def.dimIT : def.dimMC;
+            rows.push({
+              id: `${def.id}-${bu}`, ruleId: def.id, bu, isEnabled: true,
+              name: def.name, dimension: dim, timeGranularity: def.timeGranularity,
+              parameterSummary: def.parameterSummary, scenes: def.scenes,
+            });
+          });
+        });
+        setAnomalyRuleRows(rows);
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '为您查询到当前的异常识别规则如下：',
           type: 'rules-table',
-          data: rules
+          data: rows
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text.includes('复盘') || text.includes('retrospective')) {
@@ -5792,8 +6461,8 @@ export default function App() {
       const newData = prev.map(row => {
         if (row.id === rowId) {
           const updatedValues = { ...row.values, [key]: newVal };
-          const updatedReasons = { ...row.reasons, [key]: reason || row.reasons[key] || '' };
-          const updatedTags = { ...row.tags, [key]: tag || row.tags[key] || '' };
+          const updatedReasons = { ...row.reasons, [key]: reason || row.reasons?.[key] || '' };
+          const updatedTags = { ...row.tags, [key]: tag || row.tags?.[key] || '' };
           
           const updatedAnomaly = { ...row.isAnomaly };
           if (row.item === '销售FCST (ETD)') {
@@ -5853,10 +6522,17 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex items-center bg-gray-100 rounded-full p-0.5">
-            <button onClick={() => setUserRole('sales')} className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${userRole === 'sales' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销售员</button>
-            <button onClick={() => setUserRole('director')} className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${userRole === 'director' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销售总监</button>
+            <button onClick={() => setUserRole('sales')} className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${userRole === 'sales' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销售员</button>
+            <button onClick={() => setUserRole('director')} className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${userRole === 'director' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销售总监</button>
+            <button onClick={() => setUserRole('sales-admin')} className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${userRole === 'sales-admin' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销管</button>
+            <button onClick={() => setUserRole('sales-admin-head')} className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${userRole === 'sales-admin-head' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>销管主管</button>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-full p-0.5">
+            {(['TV', 'CID', 'MNT', 'NB', '车载', 'MC'] as const).map(bu => (
+              <button key={bu} onClick={() => setBuType(bu)} className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${buType === bu ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{bu}</button>
+            ))}
           </div>
           <button className="text-gray-400 hover:text-gray-600 transition-colors">
             <AlertCircle size={20} />
@@ -5874,15 +6550,15 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`flex gap-3 max-w-[90%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className={`flex gap-3 ${msg.type === 'rules-table' || msg.type === 'customer-fcst-raw' ? 'max-w-[98%]' : 'max-w-[90%]'} ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm
                   ${msg.role === 'user' ? 'bg-blue-100 text-blue-600' : 'bg-white text-gray-600 border border-gray-200'}`}>
                   {msg.role === 'user' ? <User size={18} /> : <Bot size={18} />}
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 min-w-0 overflow-hidden">
                   <div className={`px-4 py-2.5 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap
-                    ${msg.role === 'user' 
-                      ? 'bg-blue-600 text-white rounded-tr-none' 
+                    ${msg.role === 'user'
+                      ? 'bg-blue-600 text-white rounded-tr-none'
                       : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'}`}>
                     {msg.content}
                   </div>
@@ -5940,17 +6616,42 @@ export default function App() {
                   )}
                   {msg.type === 'data-item-select' && (
                     <div className="mt-4 w-full overflow-hidden">
-                      <DataItemSelectCard onSelect={(items) => processMessage('director-confirm:调整本周销售fcst')} />
+                      <DataItemSelectCard onSelect={(items) => processMessage('确认查看本周销售fcst')} />
+                    </div>
+                  )}
+                  {msg.type === 'data-item-select-dp' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <DataItemSelectCard onSelect={(items) => processMessage('确认查看本周DP')} />
                     </div>
                   )}
                   {msg.type === 'dp-table' && (
                     <div className="mt-4 w-full overflow-hidden">
-                      <DPAdjustmentTable data={msg.data} onAction={processMessage} />
+                      <DPAdjustmentTable data={msg.data} onAction={processMessage} columnLabel={msg.buType === 'NB' || msg.buType === 'MC' ? '技术别/Model' : '尺寸/model'} />
+                    </div>
+                  )}
+                  {msg.type === 'dp-table-readonly' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <DPAdjustmentTable data={msg.data} onAction={processMessage} title="本周DP" columnLabel={msg.buType === 'NB' || msg.buType === 'MC' ? '技术别/Model' : '尺寸/model'} />
+                    </div>
+                  )}
+                  {msg.type === 'table-readonly' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <DPAdjustmentTable data={msg.data} onAction={processMessage} title="本周销售FCST" />
                     </div>
                   )}
                   {msg.type === 'mnt-table' && (
                     <div className="mt-4 w-full overflow-hidden">
                       <MNTForecastTable data={msg.data} onAction={processMessage} />
+                    </div>
+                  )}
+                  {msg.type === 'nb-table' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <DPAdjustmentTable data={msg.data} onAction={processMessage} columnLabel="技术别/Model" />
+                    </div>
+                  )}
+                  {msg.type === 'customer-fcst-raw' && (
+                    <div className="mt-4 w-full min-w-0">
+                      <CustomerFCSTRawTable />
                     </div>
                   )}
                   {msg.type === 'simulation-ask' && (
@@ -6043,9 +6744,10 @@ export default function App() {
                   {msg.type === 'rules-table' && (
                     <div className="mt-4 w-full overflow-hidden flex flex-col items-start gap-3">
                       <AnomalyRulesTable
-                        rules={anomalyRules.length > 0 ? anomalyRules : msg.data}
+                        rows={anomalyRuleRows.length > 0 ? anomalyRuleRows : msg.data}
                         onToggle={handleToggleRule}
                         onEdit={handleEditRule}
+                        defaultBU={buType}
                       />
                       <div className="flex gap-3 mt-2">
                         <button className="px-6 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95">
@@ -6086,13 +6788,19 @@ export default function App() {
         <div ref={chatEndRef} />
       </main>
 
-      {editingRule && (
-        <RuleEditModal 
-          rule={editingRule} 
-          onClose={() => setEditingRule(null)} 
-          onSave={handleSaveRule} 
-        />
-      )}
+      <AnimatePresence>
+        {drawerState.isOpen && (
+          <RuleEditDrawer
+            isOpen={drawerState.isOpen}
+            ruleId={drawerState.ruleId}
+            bu={drawerState.bu}
+            dimension={drawerState.dimension}
+            timeGranularity={drawerState.timeGranularity}
+            onClose={handleCloseDrawer}
+            onSave={handleSaveDrawer}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Input Area */}
       <footer 
@@ -6113,31 +6821,51 @@ export default function App() {
         <div className="max-w-4xl mx-auto">
           {/* Quick Actions */}
           <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
-            <button 
-              onClick={() => handleQuickAction('查看并调整DP')}
-              className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
-            >
-              查看并调整DP
-            </button>
+            {userRole === 'sales' && (
+              <button
+                onClick={() => handleQuickAction('调整本周销售fcst')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
+              >
+                查看并调整本周销售fcst
+              </button>
+            )}
+            {userRole === 'director' && (
+              <button
+                onClick={() => handleQuickAction('查看本周销售fcst')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
+              >
+                查看本周销售fcst
+              </button>
+            )}
+            {userRole === 'sales-admin' && (
+              <button
+                onClick={() => handleQuickAction('查看并调整DP')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
+              >
+                查看并调整DP
+              </button>
+            )}
+            {userRole === 'sales-admin-head' && (
+              <button
+                onClick={() => handleQuickAction('查看本周DP')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
+              >
+                查看本周DP
+              </button>
+            )}
             <button
-              onClick={() => handleQuickAction('调整本周销售fcst')}
-              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
-            >
-              调整本周销售fcst
-            </button>
-            <button
-              onClick={() => handleQuickAction('调整MNT本周销售fcst')}
-              className="whitespace-nowrap px-3 py-1.5 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full text-xs font-medium hover:bg-indigo-100 transition-colors shadow-sm"
-            >
-              调整MNT本周销售fcst
-            </button>
-            <button 
               onClick={() => handleQuickAction('查看客户FCST及其变化')}
               className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
             >
               查看客户FCST及其变化
             </button>
-            <button 
+            <button
+              onClick={() => handleQuickAction('查看客户原始fcst')}
+              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+            >
+              查看客户原始fcst
+            </button>
+            <button
               onClick={() => handleQuickAction('解释客户FCST变化识别')}
               className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
             >
