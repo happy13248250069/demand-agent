@@ -398,10 +398,12 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw';
+  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
   buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
+  filterCustomer?: string;
+  filterDataItems?: string[];
 }
 
 interface ValidationRule {
@@ -4509,24 +4511,30 @@ const BatchReasonModal = ({
   );
 };
 
-const ForecastTable = ({ 
-  data, 
-  onUpdate, 
+const ForecastTable = ({
+  data,
+  onUpdate,
   onUpdateAttribute,
   onBatchUpdateReasons,
   onBatchUpdateValues,
   onSubmit,
   onValidate,
-  groupingType = 'customer-size'
-}: { 
-  data: ForecastRow[], 
-  onUpdate: (rowId: string, key: string, newVal: number, reason?: string, tag?: string) => void, 
+  onPublish,
+  groupingType = 'customer-size',
+  filterCustomer,
+  filterDataItems
+}: {
+  data: ForecastRow[],
+  onUpdate: (rowId: string, key: string, newVal: number, reason?: string, tag?: string) => void,
   onUpdateAttribute?: (rowId: string, field: string, value: string) => void,
   onBatchUpdateReasons?: (reasons: { rowId: string; key: string; reason: string; tag: string }[]) => void,
   onBatchUpdateValues?: (updates: { rowId: string; key: string; newVal: number }[]) => void,
   onSubmit: () => void,
   onValidate?: () => void,
-  groupingType?: 'customer-size' | 'tech' | 'customer-tech'
+  onPublish?: () => void,
+  groupingType?: 'customer-size' | 'tech' | 'customer-tech',
+  filterCustomer?: string,
+  filterDataItems?: string[]
 }) => {
   const [filteredData, setFilteredData] = useState(data);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -4860,409 +4868,332 @@ const ForecastTable = ({
     return () => window.removeEventListener('batch-paste', handleBatchPaste);
   });
 
+  const dataItems = ['客户FCST', '上版客户FCST', '上版客户RTF', 'AI预测', '销量预测(ETA)', '在途', '销售FCST(ETD)', '客户PSI周数模拟', '上版销售FCST', '销售FCST(ETD-...', '销售FCST（DP调...', 'FCST/上版Alloca...', '策备库存（净）', '上版Allocation'];
+
+  const [mergeMode, setMergeMode] = useState(false);
+  const [sumMode, setSumMode] = useState(false);
+  const [anomalyModalOpen, setAnomalyModalOpen] = useState(false);
+  const [anomalyModalData, setAnomalyModalData] = useState<{ model: string; dataItem: string; week: string; value: number } | null>(null);
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; weekKey: string; weekLabel: string; weekSub: string; size: string } | null>(null);
+  const [deliveryModal, setDeliveryModal] = useState<{ weekLabel: string; weekSub: string; size: string; monthTotal: number } | null>(null);
+  const [deliveryValues, setDeliveryValues] = useState<number[]>([100, 80, 90, 100, 80, 90, 65]);
+
+  const anomalyCells = new Set([
+    'ST5461D13-6_客户FCST_wk28',
+    'ST5461D13-6_客户FCST_wk31a',
+    'ST4251D02-1_客户FCST_wk28',
+    'ST4251D02-1_客户FCST_wk29',
+    'ST4251D02-1_客户FCST_wk30',
+    'ST4251D02-1_客户FCST_wk31a',
+    'ST3151B07-1_客户FCST_wk28',
+    'ST3151B07-1_客户FCST_wk30',
+    'ST3151B07-1_销售FCST(ETD)_wk29',
+    'ST3151B07-1_销售FCST(ETD)_wk30',
+    'ST6501A08-3_客户FCST_wk28',
+    'ST6501A08-3_客户FCST_wk29',
+    'ST7501D02-5_客户FCST_wk28',
+    'ST6502E03-4_客户FCST_wk28',
+    'ST5502F01-7_客户FCST_wk28',
+    'ST5502F01-7_客户FCST_wk29',
+    'ST5502F01-7_客户FCST_wk30',
+  ]);
+
+  const weekCols = [
+    { key: 'wk27', label: 'WK27', sub: '260701-04', month: '2607', highlight: false },
+    { key: 'wk28', label: 'WK28', sub: '260705-11', month: '2607', highlight: false },
+    { key: 'wk29', label: 'WK29', sub: '260712-18', month: '2607', highlight: false },
+    { key: 'wk30', label: 'WK30', sub: '260719-25', month: '2607', highlight: false },
+    { key: 'wk31a', label: 'WK31', sub: '260726-31', month: '2607', highlight: true },
+    { key: 'm2607', label: 'M26-07', sub: '', month: '2607', highlight: false, isMonthTotal: true },
+    { key: 'wk31b', label: 'WK31', sub: '260801-01', month: '2608', highlight: false },
+    { key: 'wk32', label: 'WK32', sub: '260802-08', month: '2608', highlight: false },
+    { key: 'wk33', label: 'WK33', sub: '260809-15', month: '2608', highlight: false },
+    { key: 'wk34', label: 'WK34', sub: '260816-22', month: '2608', highlight: false },
+    { key: 'wk35', label: 'WK35', sub: '260823-29', month: '2608', highlight: false },
+    { key: 'm2608', label: 'M26-08', sub: '', month: '2608', highlight: false, isMonthTotal: true },
+  ];
+
+  const months = [
+    { id: '2607', label: '2607', cols: weekCols.filter(c => c.month === '2607') },
+    { id: '2608', label: '2608', cols: weekCols.filter(c => c.month === '2608') },
+  ];
+
+  const flatRows = useMemo(() => {
+    const models = [
+      { version: 'P260726-01', model: 'ST5461D13-6', extVersion: '2.4', size: '55', groupId: '60127', customer: '小米集团_TV' },
+      { version: 'P260726-01', model: 'ST4251D02-1', extVersion: '2.4', size: '43', groupId: '60127', customer: '小米集团_TV' },
+      { version: 'P260726-01', model: 'ST3151B07-1', extVersion: '2.1', size: '31.5', groupId: '60127', customer: '小米集团_TV' },
+      { version: 'P260726-01', model: 'ST6501A08-3', extVersion: '2.2', size: '65', groupId: '60215', customer: '华为集团_TV' },
+      { version: 'P260726-01', model: 'ST5501B04-2', extVersion: '2.3', size: '55', groupId: '60215', customer: '华为集团_TV' },
+      { version: 'P260726-01', model: 'ST4301C06-1', extVersion: '1.8', size: '43', groupId: '60215', customer: '华为集团_TV' },
+      { version: 'P260726-01', model: 'ST7501D02-5', extVersion: '2.1', size: '75', groupId: '60318', customer: '三星电子_TV' },
+      { version: 'P260726-01', model: 'ST6502E03-4', extVersion: '2.0', size: '65', groupId: '60318', customer: '三星电子_TV' },
+      { version: 'P260726-01', model: 'ST5502F01-7', extVersion: '2.4', size: '55', groupId: '60318', customer: '三星电子_TV' },
+    ];
+
+    const modelData: Record<string, { fcst: number[]; prevFcst: number[]; ai: number[]; etd: number[]; dp: number[] }> = {
+      'ST5461D13-6': { fcst: [200, 800, 200, 200, 250, 1650, 0, 0, 0, 0, 0, 0], prevFcst: [200, 200, 200, 200, 200, 1000, 0, 0, 0, 0, 0, 0], ai: [200, 250, 200, 200, 200, 1050, 200, 200, 200, 200, 200, 1000], etd: [200, 250, 350, 420, 200, 1420, 200, 200, 200, 200, 200, 1000], dp: [10, 5, 2, 2, 0, 19, 0, 0, 0, 0, 0, 0] },
+      'ST4251D02-1': { fcst: [5352, 9365, 9365, 9365, 8025, 41472, 516, 3611, 3611, 3611, 3611, 14960], prevFcst: [5352, 5352, 5352, 5352, 5352, 26760, 516, 3611, 3611, 3611, 3611, 14960], ai: [5000, 5200, 5200, 5200, 5000, 25600, 500, 3500, 3500, 3500, 3500, 14500], etd: [5352, 9365, 9365, 9365, 8025, 41472, 516, 3611, 3611, 3611, 3611, 14960], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      'ST3151B07-1': { fcst: [66, 266, 66, 200, 66, 664, 66, 66, 66, 66, 66, 330], prevFcst: [66, 66, 66, 66, 66, 330, 66, 66, 66, 66, 66, 330], ai: [66, 66, 66, 66, 66, 330, 66, 66, 66, 66, 66, 330], etd: [66, 66, 116, 140, 66, 454, 66, 66, 66, 66, 66, 330], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      'ST6501A08-3': { fcst: [1200, 1500, 1800, 1400, 1300, 7200, 1100, 1200, 1200, 1200, 1200, 5900], prevFcst: [1200, 1200, 1200, 1200, 1200, 6000, 1100, 1200, 1200, 1200, 1200, 5900], ai: [1180, 1250, 1300, 1280, 1200, 6210, 1100, 1150, 1150, 1150, 1150, 5700], etd: [1200, 1500, 1800, 1400, 1300, 7200, 1100, 1200, 1200, 1200, 1200, 5900], dp: [0, 50, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0] },
+      'ST5501B04-2': { fcst: [3200, 3500, 3400, 3600, 3300, 17000, 2800, 3000, 3000, 3000, 3000, 14800], prevFcst: [3200, 3200, 3200, 3200, 3200, 16000, 2800, 3000, 3000, 3000, 3000, 14800], ai: [3100, 3300, 3300, 3400, 3200, 16300, 2750, 2900, 2900, 2900, 2900, 14350], etd: [3200, 3500, 3400, 3600, 3300, 17000, 2800, 3000, 3000, 3000, 3000, 14800], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      'ST4301C06-1': { fcst: [800, 900, 850, 920, 780, 4250, 700, 750, 750, 750, 750, 3700], prevFcst: [800, 800, 800, 800, 800, 4000, 700, 750, 750, 750, 750, 3700], ai: [780, 820, 830, 850, 770, 4050, 690, 730, 730, 730, 730, 3610], etd: [800, 900, 850, 920, 780, 4250, 700, 750, 750, 750, 750, 3700], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      'ST7501D02-5': { fcst: [420, 580, 450, 500, 430, 2380, 380, 400, 400, 400, 400, 1980], prevFcst: [420, 420, 420, 420, 420, 2100, 380, 400, 400, 400, 400, 1980], ai: [410, 430, 440, 440, 420, 2140, 375, 390, 390, 390, 390, 1935], etd: [420, 580, 450, 500, 430, 2380, 380, 400, 400, 400, 400, 1980], dp: [0, 20, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0] },
+      'ST6502E03-4': { fcst: [2100, 2800, 2300, 2500, 2200, 11900, 1900, 2000, 2000, 2000, 2000, 9900], prevFcst: [2100, 2100, 2100, 2100, 2100, 10500, 1900, 2000, 2000, 2000, 2000, 9900], ai: [2050, 2150, 2200, 2250, 2100, 10750, 1850, 1950, 1950, 1950, 1950, 9650], etd: [2100, 2800, 2300, 2500, 2200, 11900, 1900, 2000, 2000, 2000, 2000, 9900], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      'ST5502F01-7': { fcst: [4500, 5200, 4800, 5100, 4600, 24200, 4000, 4200, 4200, 4200, 4200, 20800], prevFcst: [4500, 4500, 4500, 4500, 4500, 22500, 4000, 4200, 4200, 4200, 4200, 20800], ai: [4400, 4600, 4700, 4800, 4500, 23000, 3900, 4100, 4100, 4100, 4100, 20300], etd: [4500, 5200, 4800, 5100, 4600, 24200, 4000, 4200, 4200, 4200, 4200, 20800], dp: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    };
+
+    const rows: { version: string; model: string; extVersion: string; size: string; groupId: string; customer: string; dataItem: string; values: number[] }[] = [];
+
+    models.forEach(m => {
+      const md = modelData[m.model];
+      dataItems.forEach(item => {
+        const vals = weekCols.map((_col, idx) => {
+          if (item === '客户FCST') return md?.fcst[idx] || 0;
+          if (item === '上版客户FCST') return md?.prevFcst[idx] || 0;
+          if (item === 'AI预测') return md?.ai[idx] || 0;
+          if (item === '销售FCST(ETD)') return md?.etd[idx] || 0;
+          if (item === '销售FCST（DP调...') return md?.dp[idx] || 0;
+          return 0;
+        });
+        rows.push({ ...m, dataItem: item, values: vals });
+      });
+    });
+
+    return rows;
+  }, []);
+
+  const displayRows = useMemo(() => {
+    let filtered = flatRows;
+    if (filterCustomer) {
+      filtered = filtered.filter(r => r.customer.includes(filterCustomer));
+    }
+    if (filterDataItems && filterDataItems.length > 0) {
+      filtered = filtered.filter(r => filterDataItems.includes(r.dataItem));
+    }
+    return filtered;
+  }, [flatRows, filterCustomer, filterDataItems]);
+
+  const activeDataItems = filterDataItems && filterDataItems.length > 0 ? filterDataItems : dataItems;
+
+  const ToggleSwitch = ({ label, active, onToggle: onTgl }: { label: string; active: boolean; onToggle: () => void }) => (
+    <button
+      onClick={onTgl}
+      className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${active ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+    >
+      {active && <span className="text-[10px]">取消</span>}
+      {!active && <span className="w-2 h-2 rounded-full border border-gray-400 inline-block"></span>}
+      {label}
+      {active && <span className="w-4 h-4 bg-white rounded-full inline-flex items-center justify-center"><Check size={10} className="text-blue-600" /></span>}
+    </button>
+  );
+
   return (
     <div className="flex flex-col w-full max-w-full bg-white rounded-xl border border-gray-200 shadow-sm relative z-0">
-      <div className="flex items-center justify-between p-4 bg-gray-50/50 border-b border-gray-100">
-        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-          <BarChart3 size={18} className="text-blue-600" />
-          本周销售FCST
-        </h3>
+      {/* Top Toolbar */}
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200 bg-white flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600 font-medium">布局:</span>
+          <select className="text-xs border border-gray-300 rounded px-2 py-1 bg-white min-w-[100px]">
+            <option>TV默认布局</option>
+          </select>
+          <button className="p-1 text-gray-400 hover:text-gray-600"><Settings size={14} /></button>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600 font-medium">计划对象:</span>
+          <select className="text-xs border border-gray-300 rounded px-2 py-1 bg-white min-w-[80px]">
+            <option value=""></option>
+          </select>
+          <button className="p-1 text-gray-400 hover:text-gray-600"><Settings size={14} /></button>
+        </div>
         <div className="flex items-center gap-2">
-          <button 
-            className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90"
-            title="导出当前数据"
-          >
-            <Download size={16} />
-          </button>
-          <button 
-            className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90"
-            title="导入预测数据"
-          >
-            <Upload size={16} />
-          </button>
-          <div className="relative" ref={settingsRef}>
-            <button 
-              onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)}
-              className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90"
-              title="自定义显示字段"
-            >
-              <Settings size={18} />
-            </button>
-            
-            <AnimatePresence>
-              {isColumnSettingsOpen && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2"
-                >
-                  <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
-                  <div className="max-h-60 overflow-y-auto">
-                    {allColumns.map(col => (
-                      <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
-                        <input 
-                          type="checkbox" 
-                          checked={visibleColumns.has(col.id)} 
-                          onChange={() => toggleColumn(col.id)}
-                          className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
-                        />
-                        <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-          
-          <button 
+          <span className="flex items-center gap-1 text-xs text-gray-500"><span className="w-3 h-3 rounded-full border border-gray-300 inline-block"></span> 列</span>
+          <ToggleSwitch label="合并" active={mergeMode} onToggle={() => { setMergeMode(!mergeMode); if (!mergeMode) setSumMode(false); }} />
+          <ToggleSwitch label={sumMode ? '非合计' : '合计'} active={sumMode} onToggle={() => { setSumMode(!sumMode); if (!sumMode) setMergeMode(false); }} />
+        </div>
+        <button className="px-2.5 py-1 text-xs border border-blue-500 text-blue-600 rounded hover:bg-blue-50 font-medium">扩展字段</button>
+        <button className="px-2.5 py-1 text-xs border border-blue-500 text-blue-600 rounded hover:bg-blue-50 font-medium">扩展数据项</button>
+        <span className="px-3 py-1 text-xs bg-orange-500 text-white rounded font-bold">数量单位为pcs</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
             onClick={() => setIsAddModalOpen(true)}
-            className="w-8 h-8 bg-blue-600 text-white rounded-lg flex items-center justify-center hover:bg-blue-700 transition-all shadow-sm active:scale-90"
-            title="新增预测数据条目"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-100 rounded transition-colors"
           >
-            <Plus size={20} />
+            <Plus size={14} /> 新增
           </button>
+          <button className="flex items-center gap-1 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-100 rounded transition-colors">
+            <Download size={14} /> 日志
+          </button>
+          <button className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded">...</button>
         </div>
       </div>
-      
-      <ForecastFilterBar data={data} onFilterChange={setFilteredData} />
-      
-      <div className="overflow-x-auto min-h-[500px] pb-32" ref={scrollContainerRef}>
-        <table className="w-full border-collapse text-xs">
-          <thead className="bg-gray-50 sticky top-0 z-40 shadow-sm">
-            <tr>
-              {groupingType === 'tech' ? (
-                visibleColumns.has('techModel') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[150px] bg-gray-50 text-center">技术别 / Model</th>
-              ) : (
-                <>
-                  {visibleColumns.has('customer') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[80px] bg-gray-50 text-center">集团客户名称</th>}
-                  {groupingType === 'customer-tech' ? (
-                    visibleColumns.has('tech') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[100px] bg-gray-50 text-center">技术别</th>
-                  ) : (
-                    visibleColumns.has('sizeModel') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[100px] bg-gray-50 text-center">尺寸 / Model</th>
-                  )}
-                </>
-              )}
-              {visibleColumns.has('specs') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[150px] bg-gray-50 text-center">规格描述</th>}
-              {visibleColumns.has('shippingLocation') && <th rowSpan={2} className="border border-gray-200 p-2 min-w-[80px] bg-gray-50 text-center">收货地</th>}
-              {visibleColumns.has('dataItem') && (
-                <th rowSpan={2} className="border border-gray-200 p-2 min-w-[120px] bg-gray-50 relative group text-center">
-                  <div className="flex items-center justify-center gap-1">
-                    数据项
-                    <div className="relative" ref={dataItemRef}>
-                      <button 
-                        onClick={() => setIsDataItemFilterOpen(!isDataItemFilterOpen)}
-                        className={`p-1 rounded hover:bg-gray-200 transition-colors ${visibleDataItems.size < allDataItems.length ? 'text-blue-600 bg-blue-50' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
-                        title="筛选数据项"
-                      >
-                        <Filter size={12} />
-                      </button>
-                      
-                      <AnimatePresence>
-                        {isDataItemFilterOpen && (
-                          <motion.div 
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            className="absolute top-full left-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-[110] p-2 text-left font-normal"
-                          >
-                            <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1 leading-none">选择显示数据项</p>
-                            <div className="max-h-60 overflow-y-auto">
-                              {allDataItems.map(item => (
-                                <label key={item} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={visibleDataItems.has(item)} 
-                                    onChange={() => toggleDataItem(item)}
-                                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
-                                  />
-                                  <span className={`text-[11px] font-medium transition-colors ${visibleDataItems.has(item) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{item}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
+
+      {/* Filter Row */}
+      <div className="flex items-center gap-4 px-4 py-2.5 border-b border-gray-200 bg-gray-50/50 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600">BU:</span>
+          <select className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white min-w-[80px] font-medium">
+            <option>TV</option>
+            <option>CID</option>
+            <option>MNT</option>
+            <option>NB</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600">版本：</span>
+          <div className="flex items-center gap-1 px-2 py-1 bg-white border border-gray-300 rounded text-xs">
+            <span className="font-medium">P260726-01</span>
+            <button className="text-gray-400 hover:text-gray-600"><X size={12} /></button>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600">客户集团名称</span>
+          <input type="text" placeholder="请输入" className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white w-[120px]" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600">Model Name</span>
+          <input type="text" placeholder="请输入" className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white w-[120px]" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-600">技术别</span>
+          <input type="text" placeholder="请输入" className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white w-[80px]" />
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-auto max-h-[600px]" ref={scrollContainerRef}>
+        <table className="w-full border-collapse text-xs min-w-[1400px]">
+          <thead className="bg-gray-50 sticky top-0 z-40">
+            {/* Month grouping row */}
+            <tr className="border-b border-gray-200">
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-left font-medium text-gray-700 border-r border-gray-200 min-w-[100px] bg-gray-50">
+                <div className="flex items-center gap-1">版本号 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-left font-medium text-gray-700 border-r border-gray-200 min-w-[120px] bg-gray-50">
+                <div className="flex items-center gap-1">Model Name <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-left font-medium text-gray-700 border-r border-gray-200 min-w-[70px] bg-gray-50">
+                <div className="flex items-center gap-1">对外版次 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-center font-medium text-gray-700 border-r border-gray-200 min-w-[50px] bg-gray-50">
+                <div className="flex items-center justify-center gap-1">尺寸 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-center font-medium text-gray-700 border-r border-gray-200 min-w-[60px] bg-gray-50">
+                <div className="flex items-center justify-center gap-1">集团号 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              {!mergeMode && <th rowSpan={2} className="px-3 py-2 text-left font-medium text-gray-700 border-r border-gray-200 min-w-[100px] bg-gray-50">
+                <div className="flex items-center gap-1">客户名称 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>}
+              <th rowSpan={2} className="px-3 py-2 text-left font-medium text-gray-700 border-r border-gray-200 min-w-[120px] bg-gray-50">
+                <div className="flex items-center gap-1">数据项 <ChevronDown size={10} className="text-gray-400" /> <Filter size={10} className="text-gray-400" /></div>
+              </th>
+              {months.map(m => (
+                <th key={m.id} colSpan={m.cols.length} className="px-1 py-1.5 text-center font-bold text-gray-700 border-r border-gray-200 bg-gray-50">
+                  {m.label}
                 </th>
-              )}
-              {MONTHS.filter(m => visibleColumns.has(m.name)).map(m => (
-                <th key={m.name} colSpan={m.weeks.length} className="border border-gray-200 p-1 bg-blue-50 text-blue-700 font-bold text-center">
-                  {m.name}
+              ))}
+              {sumMode && <th rowSpan={2} className="px-3 py-2 text-center font-medium text-gray-700 bg-gray-50 min-w-[60px]">合计</th>}
+            </tr>
+            <tr className="border-b border-gray-200">
+              {weekCols.map(col => (
+                <th key={col.key} className={`px-2 py-1.5 text-center font-medium border-r border-gray-200 min-w-[85px] ${col.highlight ? 'bg-orange-50 text-orange-700' : 'bg-gray-50 text-gray-700'}`}>
+                  <div className="flex items-center justify-center gap-0.5">
+                    <span className="font-bold">{col.label}</span>
+                    <ChevronDown size={9} className="text-gray-400" />
+                  </div>
+                  {col.sub && <div className="text-[10px] text-gray-400 font-normal">{col.sub}</div>}
                 </th>
               ))}
             </tr>
-            <tr>
-              {MONTHS.filter(m => visibleColumns.has(m.name)).flatMap(m => m.weeks.map(w => (
-                <th key={`${m.name}-${w}`} className="border border-gray-200 p-1 min-w-[60px] font-medium text-gray-600">
-                  {w}
-                </th>
-              )))}
-            </tr>
           </thead>
           <tbody>
-            {secondaryGroups.slice(0, visibleRowsCount).map((group) => {
-              const { primary: p, secondary: s } = group;
-              const { total, models } = groupedData[p][s];
-              const isExpanded = expandedGroups.has(`${p}-${s}`);
-              const modelNames = Object.keys(models);
-              
-              // Total rows for this size
-              const rows = [];
-              
-              // 1. Add Total rows
-              const sizeTotalRows = total.filter(r => displayItems.includes(r.item));
-              const rowCountPerModel = sizeTotalRows.length;
-              const totalRowSpan = rowCountPerModel + (isExpanded ? modelNames.length * rowCountPerModel : 0);
-              
-              sizeTotalRows.forEach((row, idx) => {
-                const isFirstInSize = idx === 0;
-                
-                rows.push(
-                  <tr key={row.id} className={`${isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'} transition-colors`}>
-                    {groupingType === 'tech' ? (
-                      visibleColumns.has('techModel') && isFirstInSize && (
-                        <td rowSpan={totalRowSpan} className="border border-gray-200 p-2 font-bold text-gray-800 bg-white align-top">
-                          <div className="flex items-center justify-between gap-2">
-                            <span>{p}</span>
-                            <button 
-                              onClick={() => toggleGroup(p, s)}
-                              className="p-1 hover:bg-gray-100 rounded transition-colors text-blue-600"
-                            >
-                              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            </button>
-                          </div>
-                          <div className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter font-semibold">汇总数据</div>
-                        </td>
-                      )
-                    ) : (
-                      <>
-                        {visibleColumns.has('customer') && isFirstInSize && (
-                          <td rowSpan={totalRowSpan} className="border border-gray-200 p-2 font-bold text-center bg-white align-top">
-                            {p}
-                          </td>
-                        )}
-                        {isFirstInSize && (
-                          groupingType === 'customer-tech' ? (
-                            visibleColumns.has('tech') && (
-                              <td className="border border-gray-200 p-2 bg-white font-bold text-gray-700">
-                                {s}
-                                <div className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter font-semibold">汇总数据</div>
-                              </td>
-                            )
-                          ) : (
-                            visibleColumns.has('sizeModel') && (
-                          <td rowSpan={rowCountPerModel} className="border border-gray-200 p-2 bg-white">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-gray-700">{s}</span>
-                              <button 
-                                onClick={() => toggleGroup(p, s)}
-                                className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600"
-                              >
-                                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              </button>
-                            </div>
-                            <div className="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter font-semibold">汇总数据</div>
-                          </td>
-                        ) ) )}
-                      </>
-                    )}
-                    {visibleColumns.has('specs') && isFirstInSize && (
-                      <td rowSpan={rowCountPerModel} className="border border-gray-200 p-2 bg-white text-gray-500 font-medium">
-                        {row.specs}
-                      </td>
-                    )}
-                    {visibleColumns.has('shippingLocation') && isFirstInSize && (
-                      <td rowSpan={rowCountPerModel} className="border border-gray-200 p-2 bg-white text-center group cursor-pointer hover:bg-blue-50 transition-colors"
-                        onClick={() => {
-                          setEditingLocationId(row.id);
-                          setLocationInputValue(row.shippingLocation || '');
+            {displayRows.map((row, rowIdx) => {
+              const isFirstOfModel = rowIdx === 0 || displayRows[rowIdx - 1].model !== row.model;
+              const modelRowCount = activeDataItems.length;
+              const rowSum = row.values.reduce((a, b) => a + b, 0);
+              return (
+                <tr key={rowIdx} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
+                  {!mergeMode && (
+                    <>
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 font-mono text-[11px]">{row.version}</td>
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 font-mono">{row.model}</td>
+                      <td className="px-3 py-2 text-center text-gray-700 border-r border-gray-200">{row.extVersion}</td>
+                      <td className="px-3 py-2 text-center text-gray-700 border-r border-gray-200">{row.size}</td>
+                      <td className="px-3 py-2 text-center text-gray-700 border-r border-gray-200">{row.groupId}</td>
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200">{row.customer}</td>
+                    </>
+                  )}
+                  {mergeMode && isFirstOfModel && (
+                    <>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-gray-700 border-r border-gray-200 align-middle font-mono text-[11px]">{row.version}</td>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-gray-700 border-r border-gray-200 align-middle font-mono">{row.model}</td>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-center text-gray-700 border-r border-gray-200 align-middle">{row.extVersion}</td>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-center text-gray-700 border-r border-gray-200 align-middle">{row.size}</td>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-center text-gray-700 border-r border-gray-200 align-middle">{row.groupId}</td>
+                      <td rowSpan={modelRowCount} className="px-3 py-2 text-gray-700 border-r border-gray-200 align-middle">{row.customer}</td>
+                    </>
+                  )}
+                  <td className={`px-3 py-2 border-r border-gray-200 font-medium ${row.dataItem === '销售FCST(ETD)' ? 'text-orange-500' : 'text-gray-800'}`}>
+                    {row.dataItem}
+                  </td>
+                  {row.values.map((val, vIdx) => {
+                    const cellKey = `${row.model}_${row.dataItem}_${weekCols[vIdx]?.key}`;
+                    const isAnomaly = anomalyCells.has(cellKey);
+                    return (
+                      <td
+                        key={vIdx}
+                        className={`px-2 py-2 text-right border-r border-gray-200 tabular-nums ${isAnomaly ? 'bg-red-100 text-red-700 font-bold cursor-pointer hover:bg-red-200 transition-colors' : `text-gray-700 ${weekCols[vIdx]?.highlight ? 'bg-orange-50/50' : ''}`}`}
+                        onClick={isAnomaly ? () => { setAnomalyModalData({ model: row.model, dataItem: row.dataItem, week: weekCols[vIdx]?.label || '', value: val }); setAnomalyModalOpen(true); } : undefined}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          if (row.dataItem === '销售FCST(ETD)') {
+                            setContextMenu({ x: e.clientX, y: e.clientY, weekKey: weekCols[vIdx]?.key || '', weekLabel: weekCols[vIdx]?.label || '', weekSub: weekCols[vIdx]?.sub || '', size: row.size });
+                          }
                         }}
                       >
-                        {editingLocationId === row.id ? (
-                          <input 
-                            autoFocus
-                            className="w-full px-1 py-0.5 text-xs border border-blue-400 rounded focus:outline-none"
-                            value={locationInputValue}
-                            onChange={(e) => setLocationInputValue(e.target.value)}
-                            onBlur={() => handleLocationSave(row.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleLocationSave(row.id);
-                              if (e.key === 'Escape') setEditingLocationId(null);
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center gap-1">
-                            <span className="text-gray-700">{row.shippingLocation || '-'}</span>
-                            <Edit2 size={10} className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </div>
-                        )}
+                        {val}
                       </td>
-                    )}
-                    {visibleColumns.has('dataItem') && (
-                      <td className="border border-gray-200 p-2 font-medium text-black">
-                        {row.item}
-                      </td>
-                    )}
-                    {MONTHS.filter(m => visibleColumns.has(m.name)).flatMap(m => m.weeks.map(w => {
-                      const key = `${m.name}-${w}`;
-                      return (
-                        <td key={key} className="border border-gray-200 p-0 h-8">
-                          <EditableCell 
-                            value={row.values[key]} 
-                            isEditable={false}
-                            isAnomaly={row.isAnomaly?.[key]}
-                            reason={row.reasons?.[key]}
-                            tag={row.tags?.[key]}
-                            aiSummary={row.aiSummaries?.[key]}
-                            violatedRules={row.violatedRules?.[key]}
-                            isAIPrediction={row.item === 'AI预测'}
-                            onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
-                            oldValue={row.prevValues?.[key]}
-                          />
-                        </td>
-                      );
-                    }))}
-                  </tr>
-                );
-              });
-
-              // 2. Add Model rows if expanded
-              if (isExpanded) {
-                modelNames.forEach(modelName => {
-                  const modelRows = models[modelName].filter(r => displayItems.includes(r.item));
-                  const modelRowSpan = modelRows.length;
-                  
-                  modelRows.forEach((row, idx) => {
-                    const isFirstInModel = idx === 0;
-                    rows.push(
-                      <tr key={row.id} className="bg-white hover:bg-gray-50 transition-colors">
-                        {groupingType === 'tech' ? (
-                          visibleColumns.has('techModel') && isFirstInModel && (
-                            <td rowSpan={modelRowSpan} className="border border-gray-200 p-2 pl-8 bg-gray-50/50 italic text-gray-600">
-                              <div className="flex items-center gap-1">
-                                <ChevronRight size={10} className="text-gray-300" />
-                                {modelName}
-                              </div>
-                            </td>
-                          )
-                        ) : (
-                          visibleColumns.has('sizeModel') && isFirstInModel && (
-                            <td rowSpan={modelRowSpan} className="border border-gray-200 p-2 pl-6 bg-gray-50/50 italic text-gray-500">
-                              <div className="flex items-center gap-1">
-                                <ChevronRight size={10} className="text-gray-300" />
-                                {modelName}
-                              </div>
-                            </td>
-                          )
-                        )}
-                        {visibleColumns.has('specs') && isFirstInModel && (
-                          <td rowSpan={modelRowSpan} className="border border-gray-200 p-2 bg-gray-50/50 text-gray-400 italic">
-                            {row.specs}
-                          </td>
-                        )}
-                        {visibleColumns.has('shippingLocation') && isFirstInModel && (
-                          <td rowSpan={modelRowSpan} className="border border-gray-200 p-2 bg-white text-center group cursor-pointer hover:bg-blue-50 transition-colors"
-                            onClick={() => {
-                              setEditingLocationId(row.id);
-                              setLocationInputValue(row.shippingLocation || '');
-                            }}
-                          >
-                            {editingLocationId === row.id ? (
-                              <input 
-                                autoFocus
-                                className="w-full px-1 py-0.5 text-xs border border-blue-400 rounded focus:outline-none"
-                                value={locationInputValue}
-                                onChange={(e) => setLocationInputValue(e.target.value)}
-                                onBlur={() => handleLocationSave(row.id)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleLocationSave(row.id);
-                                  if (e.key === 'Escape') setEditingLocationId(null);
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            ) : (
-                              <div className="flex items-center justify-center gap-1">
-                                <span className="text-gray-700">{row.shippingLocation || '-'}</span>
-                                <Edit2 size={10} className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
-                              </div>
-                            )}
-                          </td>
-                        )}
-                        {visibleColumns.has('dataItem') && (
-                          <td className={`border border-gray-200 p-2 font-medium ${row.item === '销售FCST (ETD)' || row.item === 'ExtraSales' ? 'text-blue-600' : 'text-black'}`}>
-                            {row.item}
-                          </td>
-                        )}
-                        {MONTHS.filter(m => visibleColumns.has(m.name)).flatMap(m => m.weeks.map(w => {
-                          const key = `${m.name}-${w}`;
-                          const isEditable = row.item === '销售FCST (ETD)' || row.item === 'ExtraSales';
-                          return (
-                            <td key={key} className="border border-gray-200 p-0 h-8">
-                              <EditableCell 
-                                value={row.values[key]} 
-                                isEditable={isEditable}
-                                isAnomaly={row.isAnomaly?.[key]}
-                                reason={row.reasons?.[key]}
-                                tag={row.tags?.[key]}
-                                aiSummary={row.aiSummaries?.[key]}
-                                violatedRules={row.violatedRules?.[key]}
-                                isAIPrediction={row.item === 'AI预测'}
-                                onSave={(val, reason, tag) => onUpdate(row.id, key, val, reason, tag)}
-                                startRowId={row.id}
-                                startColumnKey={key}
-                                oldValue={row.prevValues?.[key]}
-                                allowModificationMarker={row.item === '销售FCST (ETD)' || row.item === 'ExtraSales'}
-                              />
-                            </td>
-                          );
-                        }))}
-                      </tr>
                     );
-                  });
-                });
-              }
-
-              return rows;
+                  })}
+                  {sumMode && (
+                    <td className="px-2 py-2 text-right tabular-nums text-gray-700 font-medium">{rowSum}</td>
+                  )}
+                </tr>
+              );
             })}
           </tbody>
         </table>
       </div>
-      
-      <div className="p-4 flex justify-between items-center bg-gray-50 border-t border-gray-200">
-        {visibleRowsCount < secondaryGroups.length ? (
-          <button 
-            onClick={handleLoadMore}
-            className="text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 transition-all"
-          >
-            加载更多 <ChevronDown size={16} />
-          </button>
-        ) : (
-          <span className="text-gray-400 text-[10px] uppercase tracking-widest">已加载全部数据</span>
-        )}
-        
+
+      {/* Footer */}
+      <div className="px-4 py-2.5 flex justify-between items-center bg-gray-50 border-t border-gray-200">
+        <span className="text-[10px] text-gray-400">宽度调整：120</span>
         <div className="flex gap-2">
           {onValidate && (
-            <button 
+            <button
               onClick={onValidate}
               className="bg-white border border-blue-600 text-blue-600 px-6 py-2 rounded-lg font-bold hover:bg-blue-50 transition-all shadow-md active:scale-95"
             >
               执行校验
             </button>
           )}
-          <button 
+          <button
             onClick={handleSubmitClick}
             className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95"
           >
             提交修改
           </button>
+          <button
+            onClick={() => setPublishModalOpen(true)}
+            className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700 transition-all shadow-md active:scale-95"
+          >
+            发布
+          </button>
         </div>
       </div>
 
-      <BatchReasonModal 
+      <BatchReasonModal
         isOpen={isBatchModalOpen}
         onClose={() => setIsBatchModalOpen(false)}
         items={itemsToValidate}
@@ -5273,23 +5204,221 @@ const ForecastTable = ({
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onAdd={(newData) => {
-          const newRow: ForecastRow = {
-            id: `new-${Date.now()}`,
-            customer: newData.customerGroup || '新增客户',
-            size: '55',
-            model: newData.modelName || 'New Model',
-            item: '客户FCST',
-            specs: '',
-            version: newData.extVersion || '1.0',
-            values: {},
-            isAnomaly: {},
-            aiSummaries: {},
-            violatedRules: {}
-          };
-          setFilteredData(prev => [newRow, ...prev]);
           setIsAddModalOpen(false);
         }}
       />
+
+      {/* AI异常归因弹窗 */}
+      {anomalyModalOpen && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+          >
+            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900">AI异常归因</h2>
+              <button onClick={() => setAnomalyModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {/* 异常推理 */}
+              <div>
+                <h3 className="text-base font-bold text-gray-900 mb-4">异常推理</h3>
+                <div className="bg-gray-50 rounded-xl p-5 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-800 mt-2 shrink-0"></span>
+                    <p className="text-sm text-gray-700">归因：65寸Model B已EOP但仍报250件，疑似客户系统未同步产品状态或有尾货清仓需求</p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-800 mt-2 shrink-0"></span>
+                    <p className="text-sm text-gray-700">判断：存疑——EOP产品不应有新增预测，需人工确认</p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-800 mt-2 shrink-0"></span>
+                    <p className="text-sm text-gray-700">建议：联系小米对口PM确认是否为遗留订单转移或系统录入错误</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 规则分析 */}
+              <div>
+                <h3 className="text-base font-bold text-gray-900 mb-4">规则分析</h3>
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-bold text-gray-800">规则①：产品生命周期校验</p>
+                    <span className="text-xs font-bold text-red-500 px-2 py-0.5 bg-red-50 rounded">违反规则</span>
+                  </div>
+                  <div className="space-y-1.5 text-sm text-gray-600">
+                    <p>描述: 处于EOP（停产）阶段的产品，不应有新增FCST。</p>
+                    <p>情况: 小米 65寸 Model B V1.1 已于 2026-01-15 进入EOP状态，但本周仍申报 250 件。</p>
+                    <p>结论: EOP产品不应有新增预测，需与客户确认是否为遗留订单。</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 外部情报解读 */}
+              <div>
+                <h3 className="text-base font-bold text-gray-900 mb-4">外部情报解读</h3>
+                <div className="bg-gray-50 rounded-xl p-5 space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-bold text-gray-800">小米电视宣布618大促提前启动，备货量同比增长25%</p>
+                      <span className="text-[10px] px-2 py-0.5 bg-gray-200 text-gray-600 rounded font-medium shrink-0 ml-2">促销备货</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mb-3">原文：小米电视宣布今年618年中大促将提前至5月15日启动，涵盖55寸、65寸、75寸全系电视品类，预计面板备货量同比增长25%以上。</p>
+                    <p className="text-sm text-gray-700"><span className="font-medium">受影响对象：</span>小米/TV BU</p>
+                    <p className="text-sm text-gray-700"><span className="font-medium">影响方向：</span><span className="text-blue-600 underline">正向–促销活动拉动面板采购需求</span></p>
+                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
+                      <span className="text-xs text-gray-500">相似度 0.82（高相关）</span>
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 bg-teal-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold">1</span>
+                        <span className="text-xs text-gray-500">来源:企业公告</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="border-t border-gray-200 pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-bold text-gray-800">TrendForce：2026年Q2全球电视面板价格预计上涨8-12%</p>
+                      <span className="text-[10px] px-2 py-0.5 bg-gray-200 text-gray-600 rounded font-medium shrink-0 ml-2">面板涨价</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mb-3">原文：据TrendForce集邦咨询研究，受上游材料成本上涨及产能调控影响，2026年Q2全球电视面板价格预计上涨8-12%，其中大尺寸（65寸以上）涨幅更为显著。</p>
+                    <p className="text-sm text-gray-700"><span className="font-medium">受影响对象：</span>全尺寸TV面板</p>
+                    <p className="text-sm text-gray-700"><span className="font-medium">影响方向：</span><span className="text-blue-600 underline">正向–涨价预期促使客户提前备货</span></p>
+                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
+                      <span className="text-xs text-gray-500">相似度 0.75（中高相关）</span>
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 bg-teal-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold">2</span>
+                        <span className="text-xs text-gray-500">来源:行业研报</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </div>,
+        document.body
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && createPortal(
+        <div className="fixed inset-0 z-[99998]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}>
+          <div
+            className="absolute bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+              onClick={() => {
+                const sub = contextMenu.weekSub;
+                const monthTotal = 600;
+                setDeliveryModal({ weekLabel: contextMenu.weekLabel, weekSub: sub, size: contextMenu.size, monthTotal });
+                setDeliveryValues([100, 80, 90, 100, 80, 90, 65]);
+                setContextMenu(null);
+              }}
+            >
+              特殊交期
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* 特殊交期弹窗 */}
+      {deliveryModal && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden"
+          >
+            <div className="p-6">
+              <p className="text-sm text-gray-800 mb-4">
+                特殊交期编辑 · <span className="text-green-600 font-bold">{deliveryModal.size}寸</span> · {deliveryModal.weekLabel} ({deliveryModal.weekSub}) · 月总量: <span className="font-bold">{deliveryModal.monthTotal}</span>
+              </p>
+              <div className="grid grid-cols-7 gap-3 mb-4">
+                {(() => {
+                  const parts = deliveryModal.weekSub.split('-');
+                  const startMonth = parseInt(parts[0].slice(2, 4));
+                  const startDay = parseInt(parts[0].slice(4, 6));
+                  const days: string[] = [];
+                  for (let i = 0; i < 7; i++) {
+                    days.push(`${startMonth}/${startDay + i}`);
+                  }
+                  return days.map((day, i) => (
+                    <div key={i} className="flex flex-col items-center gap-1.5">
+                      <span className="text-xs text-gray-500">{day}</span>
+                      <input
+                        type="number"
+                        value={deliveryValues[i]}
+                        onChange={(e) => {
+                          const newVals = [...deliveryValues];
+                          newVals[i] = Number(e.target.value) || 0;
+                          setDeliveryValues(newVals);
+                        }}
+                        className="w-full px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      />
+                    </div>
+                  ));
+                })()}
+              </div>
+              <p className="text-sm mb-4">
+                合计: <span className="font-bold text-blue-600">{deliveryValues.reduce((a, b) => a + b, 0)}</span> / 月总量: {deliveryModal.monthTotal}
+                {deliveryValues.reduce((a, b) => a + b, 0) === deliveryModal.monthTotal && (
+                  <span className="text-green-600 ml-2">✓ 校验通过</span>
+                )}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDeliveryModal(null)}
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  确定
+                </button>
+                <button
+                  onClick={() => setDeliveryModal(null)}
+                  className="px-4 py-1.5 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>,
+        document.body
+      )}
+
+      {/* 发布确认弹窗 */}
+      {publishModalOpen && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+          >
+            <h3 className="text-lg font-bold text-gray-900 mb-3">确认发布</h3>
+            <p className="text-sm text-gray-600 mb-6">确认发布版本 <span className="font-bold text-gray-800">P260726-01</span>？发布后数据将对下游可见，此操作不可撤回。</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setPublishModalOpen(false)}
+                className="px-5 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => { setPublishModalOpen(false); onPublish?.(); }}
+                className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 transition-all active:scale-95"
+              >
+                确认发布
+              </button>
+            </div>
+          </motion.div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };
@@ -5706,8 +5835,120 @@ const CustomerFCSTRawTable = () => {
     periodEnd: '202712',
   });
 
+  const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
+  const [mappingSuccess, setMappingSuccess] = useState(false);
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+      {/* Mapping Modal */}
+      {isMappingModalOpen && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+          >
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <h2 className="text-base font-bold text-gray-800">客户料号映射关系-新增</h2>
+                <span className="px-2 py-0.5 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded">New</span>
+              </div>
+              <button onClick={() => { setIsMappingModalOpen(false); setMappingSuccess(false); }} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {mappingSuccess ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-12 gap-4">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                  <Check size={32} className="text-green-600" />
+                </div>
+                <p className="text-lg font-bold text-gray-800">新增成功</p>
+                <p className="text-sm text-gray-500">客户料号映射关系已成功创建</p>
+                <button
+                  onClick={() => { setIsMappingModalOpen(false); setMappingSuccess(false); }}
+                  className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all"
+                >
+                  确定
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="flex items-center gap-2 mb-6">
+                    <div className="w-1 h-4 bg-blue-600 rounded-full"></div>
+                    <span className="text-sm font-bold text-gray-800">基本信息</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-x-6 gap-y-5">
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block"><span className="text-red-500">*</span> BU：</label>
+                      <select className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none">
+                        <option value=""></option>
+                        <option value="TV">TV</option>
+                        <option value="CID">CID</option>
+                        <option value="MNT">MNT</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">客户集团：</label>
+                      <select className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white appearance-none">
+                        <option value=""></option>
+                        <option value="TCL品牌集团_TV">TCL品牌集团_TV</option>
+                        <option value="小米集团">小米集团</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">客户PN：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">华星Modelname：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">对外版次：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">产品ID：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">Product ID：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">Offering ID：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1.5 block">备注：</label>
+                      <input type="text" placeholder="请输入" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                  <button
+                    onClick={() => setIsMappingModalOpen(false)}
+                    className="px-5 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={() => setMappingSuccess(true)}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold shadow-md hover:bg-blue-700 transition-all active:scale-95"
+                  >
+                    保存
+                  </button>
+                </div>
+              </>
+            )}
+          </motion.div>
+        </div>,
+        document.body
+      )}
+
       {/* Header */}
       <div className="px-5 py-3 border-b border-gray-200">
         <h2 className="text-base font-bold text-gray-800">客户FCST管理</h2>
@@ -5775,6 +6016,12 @@ const CustomerFCSTRawTable = () => {
         <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">导入</button>
         <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">查看异常数据</button>
         <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">计划对象</button>
+        <button
+          onClick={() => setIsMappingModalOpen(true)}
+          className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 font-medium transition-colors"
+        >
+          客户料号映射-新增
+        </button>
         <button className="px-3 py-1.5 bg-white text-gray-700 text-xs border border-gray-300 rounded hover:bg-gray-50">日志</button>
         <button className="px-3 py-1.5 bg-white text-blue-600 text-xs border border-blue-300 rounded hover:bg-blue-50 font-medium">扩展字段</button>
         <span className="ml-auto text-xs text-gray-500">发布状态：未发布</span>
@@ -6025,12 +6272,34 @@ export default function App() {
           const agentMsg: Message = { id: (Date.now() + 1).toString(), role: 'agent', content: '好的，为您展示本周销售预测数据（只读模式）。', type: 'table-readonly', data: initialData };
           setMessages(prev => [...prev, agentMsg]);
         }
-      } else if (text.includes('查看本周销售fcst')) {
+      } else if ((text.includes('销售fcst') || text.includes('销售FCST') || text.includes('客户FCST') || text.includes('FCST')) && (text.includes('查看本周') || text.includes('调整本周'))) {
+        const initialData = generateInitialData();
+        setForecastData(initialData);
+        const customerMap: Record<string, string> = { '小米': '小米集团_TV', '华为': '华为集团_TV', '三星': '三星电子_TV', 'TCL': 'TCL品牌集团_TV', 'OPPO': 'OPPO集团_TV' };
+        let detectedCustomer: string | undefined;
+        for (const [keyword, fullName] of Object.entries(customerMap)) {
+          if (text.includes(keyword)) { detectedCustomer = fullName; break; }
+        }
+        const allDataItemNames = ['客户FCST', '上版客户FCST', '上版客户RTF', 'AI预测', '销量预测(ETA)', '在途', '销售FCST(ETD)', '客户PSI周数模拟', '上版销售FCST'];
+        const detectedItems: string[] = [];
+        for (const item of allDataItemNames) {
+          if (text.includes(item)) detectedItems.push(item);
+        }
+        if (text.includes('销售FCST') && !text.includes('销售FCST(ETD)') && !detectedItems.includes('销售FCST(ETD)')) {
+          if (!detectedItems.some(i => i.includes('销售FCST'))) detectedItems.push('销售FCST(ETD)');
+        }
+        const parts: string[] = [];
+        if (detectedCustomer) parts.push(`客户：${detectedCustomer}`);
+        if (detectedItems.length > 0) parts.push(`数据项：${detectedItems.join('、')}`);
+        const filterDesc = parts.length > 0 ? `已为您筛选${parts.join('，')}。` : '';
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
-          content: '您好，销售总监。请先选择您想查看的数据项，确认后为您展示对应数据。',
-          type: 'data-item-select'
+          content: `好的，为您查询到本周销售预测数据如下。${filterDesc}`,
+          type: 'table',
+          data: initialData,
+          filterCustomer: detectedCustomer,
+          filterDataItems: detectedItems.length > 0 ? detectedItems : undefined
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if ((userRole === 'director') && (text.includes('调整本周销售fcst') || text.includes('fcst')) && !text.startsWith('director-confirm:') && !text.startsWith('确认查看')) {
@@ -6069,12 +6338,20 @@ export default function App() {
           const agentMsg: Message = {
             id: (Date.now() + 1).toString(),
             role: 'agent',
-            content: '好的，为您查询到本周客户预测数据如下。您可以点击"尺寸"单元格旁的箭头展开查看具体的 Model 维度数据。',
+            content: '好的，为您查询到本周客户预测数据如下。',
             type: 'table',
             data: initialData
           };
           setMessages(prev => [...prev, agentMsg]);
         }
+      } else if (text === '发布版本') {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '版本 P260726-01 发布成功。数据已同步至下游系统。',
+          type: 'text'
+        };
+        setMessages(prev => [...prev, agentMsg]);
       } else if (text === '提交修改') {
         const agentMsg: Message = { 
           id: (Date.now() + 1).toString(), 
@@ -6550,7 +6827,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`flex gap-3 ${msg.type === 'rules-table' || msg.type === 'customer-fcst-raw' ? 'max-w-[98%]' : 'max-w-[90%]'} ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className={`flex gap-3 ${msg.type === 'rules-table' || msg.type === 'customer-fcst-raw' || msg.type === 'table' || msg.type === 'forecast-view' ? 'max-w-[98%]' : 'max-w-[90%]'} ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm
                   ${msg.role === 'user' ? 'bg-blue-100 text-blue-600' : 'bg-white text-gray-600 border border-gray-200'}`}>
                   {msg.role === 'user' ? <User size={18} /> : <Bot size={18} />}
@@ -6563,16 +6840,19 @@ export default function App() {
                     {msg.content}
                   </div>
                   {msg.type === 'table' && (
-                    <div className="mt-4 w-full overflow-hidden">
+                    <div className="mt-4 w-full min-w-0">
                       <ForecastTable
-                        data={forecastData.map(r => r.item === '销售FCST (ETD)' ? { ...r, isAnomaly: {}, aiSummaries: {}, violatedRules: {} } : r)}
+                        data={forecastData}
                         groupingType={msg.groupingType}
-                        onUpdate={handleUpdate} 
+                        onUpdate={handleUpdate}
                         onUpdateAttribute={handleUpdateAttribute}
                         onBatchUpdateReasons={handleBatchUpdateReasons}
                         onBatchUpdateValues={handleBatchUpdateValues}
-                        onSubmit={() => processMessage('提交修改')} 
-                        onValidate={() => processMessage('执行校验')} 
+                        onSubmit={() => processMessage('提交修改')}
+                        onValidate={() => processMessage('执行校验')}
+                        onPublish={() => processMessage('发布版本')}
+                        filterCustomer={msg.filterCustomer}
+                        filterDataItems={msg.filterDataItems}
                       />
                     </div>
                   )}

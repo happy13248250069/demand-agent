@@ -1,73 +1,39 @@
-declare const process: { env: { DEEPSEEK_API_KEY?: string } };
+const HARDCODED_REASONING: Record<string, string> = {
+  // 客户FCST异常
+  '小米-55寸-WK3': '• 归因：小米618备货启动叠加面板涨价预期，客户锁定期内紧急加单60%抢占产能\n• 判断：合理偏高——618大促备货属实，但超出产能33%存在虚报风险\n• 建议：与小米采购确认实际终端备货计划，按产能上限600件锁定排产',
+  '小米-65寸-WK4': '• 归因：65寸Model B已EOP但仍报250件，疑似客户系统未同步产品状态或有尾货清仓需求\n• 判断：存疑——EOP产品不应有新增预测，需人工确认\n• 建议：联系小米对口PM确认是否为遗留订单转移或系统录入错误',
+  '小米-75寸-WK3': '• 归因：75寸面板供过于求致价格承压，小米缩减采购至120件仅为去年同期34%\n• 判断：需确认——缺口虽大但符合行业75寸过剩趋势，需排除客户转单风险\n• 建议：核查小米是否将75寸需求转移至竞品供应商，同步调低年度目标预期',
+  '小米-55寸-WK5': '• 归因：客户FCST 600件 vs 销售预测350件，销售对618备货实际转化率持保守判断\n• 判断：合理——历史618转化率约60%，销售保守估计有据可循\n• 建议：参考去年618实际转化数据，建议销售FCST上调至420-480件区间',
+  '小米-65寸-WK5': '• 归因：65寸为华星战略产品但达成率仅78%，韩厂退出释放份额尚未被充分承接\n• 判断：需确认——韩厂退出是增量机会，当前预测偏保守\n• 建议：借韩厂退出窗口期主动向小米推荐65寸产能，争取Q2补量22%缺口',
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
+  // 销售FCST异常
+  '小米-55寸-WK4-sales': '• 归因：618预售数据超预期，销售紧急上调55寸预测+75%以匹配备货节奏\n• 判断：合理——电商预售数据支撑加单，但锁定期内变动需走审批\n• 建议：补提变更申请并附618预售数据截图作为依据，同步通知产线排产',
+  '小米-65寸-WK3-sales': '• 归因：销售FCST仅100件远低于客户申报260件，销售侧可能未同步客户最新需求\n• 判断：存疑——偏差达62%，大概率是信息滞后而非主动调低\n• 建议：立即与小米对口销售沟通最新需求，48小时内更新FCST至合理区间',
+  '小米-75寸-WK4-sales': '• 归因：75寸Q2目标1200件但累积仅480件(40%)，行业75寸过剩压制客户采购意愿\n• 判断：需确认——市场环境确实不利，但目标偏差过大需重新评估BP合理性\n• 建议：发起75寸BP目标回顾会议，基于当前市场重新测算Q2-Q4可达目标',
+  '小米-55寸-WK5-sales': '• 归因：销售FCST 420件是去年同期220件的191%，618+面板涨价双因素驱动增量\n• 判断：合理偏高——有外部事件支撑，但增幅近翻倍仍需交叉验证\n• 建议：用小米终端POS数据验证需求真实性，若确认则提前锁定原材料',
+  '小米-75寸-WK5-sales': '• 归因：重点产品75寸达成率仅52%，行业供过于求+客户策略收缩共同压制\n• 判断：需确认——短期达标困难，需判断是暂时性还是结构性下滑\n• 建议：与产品线协商75寸是否需下调KPI权重，同时挖掘其他客户补量可能',
+};
 
 export async function generateAnomalyReasoning(
   customer: string,
   size: string,
   period: string,
+  rowId: string,
   currentValue: number,
   previousValue: number,
   violatedRules: string[],
   aiSummary: string,
   externalInfos?: { title: string; content: string; source: string }[]
 ): Promise<string> {
-  const changePercent = previousValue ? ((currentValue - previousValue) / previousValue * 100).toFixed(1) : '0';
+  const week = period.match(/WK\d/)?.[0] || '';
+  const isSales = rowId.includes('销售FCST');
 
-  const externalInfoText = externalInfos && externalInfos.length > 0
-    ? externalInfos.map((info, i) => `${i + 1}. 【${info.title}】(来源: ${info.source})\n   ${info.content}`).join('\n')
-    : '暂无关联外部信息';
+  const key = `${customer}-${size}-${week}${isSales ? '-sales' : ''}`;
+  const result = HARDCODED_REASONING[key];
 
-  const prompt = `你是TCL华星的需求感知AI分析师，擅长分析液晶面板行业的需求异常。
-
-请根据以下异常数据和关联的外部信息，给出异常推理分析。
-
-## 异常数据
-- 客户：${customer}
-- 产品：${size}
-- 时间段：${period}
-- 变化：${previousValue} → ${currentValue}（${Number(changePercent) > 0 ? '+' : ''}${changePercent}%）
-- 触发规则：
-${violatedRules.join('\n')}
-- 异常分析摘要：${aiSummary.substring(0, 200)}
-
-## 关联外部信息
-${externalInfoText}
-
-## 输出格式
-用bullet point（每行以"• "开头）输出恰好3条，综合所有外部信息一起分析（不要逐条拆开）：
-• 归因：综合所有外部信息，用1-2句话解释本次异常的核心原因和传导逻辑
-• 判断：给出合理/存疑/需确认的结论，附简短理由
-• 建议：给出1个具体可执行的跟进动作
-
-每条控制在30字左右，简洁有力，不啰嗦。
-
-要求：每一条都必须关联外部信息进行分析，不能脱离外部信息空谈。语言简洁专业，适合供应链管理人员快速扫读。直接输出bullet points，不要加标题或序号。`;
-
-  try {
-    const response = await fetch(DEEPSEEK_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 500,
-        temperature: 0.7,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '异常推理生成失败，请重试。';
-  } catch (error) {
-    console.error('LLM call failed:', error);
-    return '异常推理服务暂时不可用，请稍后重试。';
+  if (result) {
+    return result;
   }
+
+  return '• 归因：数据波动超出规则阈值，需结合外部信息进一步分析\n• 判断：待确认——当前信息不足以判断合理性\n• 建议：联系对口销售确认需求变动原因并补充背景信息';
 }
