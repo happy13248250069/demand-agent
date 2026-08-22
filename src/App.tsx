@@ -419,7 +419,7 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'fcst-dimension-select' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
+  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
   buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
@@ -3846,46 +3846,6 @@ const ExternalInfoCards = ({ info }: { info: ExternalInfo[] }) => {
   );
 };
 
-const ForecastDimensionSelect = ({ onSelect }: { onSelect: (dimension: string) => void }) => {
-  return (
-    <div className="flex flex-col gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm max-w-md">
-      <h3 className="text-sm font-bold text-gray-800">请选择展示维度</h3>
-      <div className="grid grid-cols-1 gap-2">
-        <button 
-          onClick={() => onSelect('查看客户&尺寸维度的客户FCST变化情况')}
-          className="flex items-center justify-between px-4 py-3 bg-blue-50 border border-blue-100 rounded-lg group hover:bg-blue-100 transition-all text-left"
-        >
-          <div className="flex flex-col">
-            <span className="text-xs font-bold text-blue-700">客户 & 尺寸维度</span>
-            <span className="text-[10px] text-blue-500 mt-0.5">按客户和产品尺寸进行汇总，可展开至Model</span>
-          </div>
-          <ChevronRight size={16} className="text-blue-400 group-hover:translate-x-0.5 transition-transform" />
-        </button>
-        <button 
-          onClick={() => onSelect('查看技术别维度的客户FCST变化情况')}
-          className="flex items-center justify-between px-4 py-3 bg-orange-50 border border-orange-100 rounded-lg group hover:bg-orange-100 transition-all text-left"
-        >
-          <div className="flex flex-col">
-            <span className="text-xs font-bold text-orange-700">技术别维度</span>
-            <span className="text-[10px] text-orange-500 mt-0.5">按面板技术类型进行汇总，可展开至Model</span>
-          </div>
-          <ChevronRight size={16} className="text-orange-400 group-hover:translate-x-0.5 transition-transform" />
-        </button>
-        <button 
-          onClick={() => onSelect('查看客户&技术别维度的客户FCST变化情况')}
-          className="flex items-center justify-between px-4 py-3 bg-green-50 border border-green-100 rounded-lg group hover:bg-green-100 transition-all text-left"
-        >
-          <div className="flex flex-col">
-            <span className="text-xs font-bold text-green-700">客户 & 技术别维度</span>
-            <span className="text-[10px] text-green-500 mt-0.5">按客户和技术别进行汇总，不展开至Model</span>
-          </div>
-          <ChevronRight size={16} className="text-green-400 group-hover:translate-x-0.5 transition-transform" />
-        </button>
-      </div>
-    </div>
-  );
-};
-
 const SimulationVersionSelectView = ({ onConfirm, onNavigateToDP }: { onConfirm: (versions: string[]) => void, onNavigateToDP?: () => void }) => {
   const versions = [
     { id: 'P260329-04-001', date: '2026-03-30' },
@@ -5277,7 +5237,7 @@ const ForecastTable = ({
             >...</button>
             {moreMenuOpen && (
               <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[120px] z-50">
-                {['日志', '重置', '展开', '搜索', '保存', '发布', '发布记录'].map(item => (
+                {['日志', '重置', '展开', '搜索', '发布记录'].map(item => (
                   <button
                     key={item}
                     onClick={() => setMoreMenuOpen(false)}
@@ -5635,7 +5595,7 @@ const ForecastTable = ({
             onClick={handleSubmitClick}
             className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95"
           >
-            提交修改
+            保存
           </button>
           <button
             onClick={() => setPublishModalOpen(true)}
@@ -7233,16 +7193,15 @@ export default function App() {
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text === '需要进行校验' || text === '执行校验') {
-        const rules: ValidationRule[] = [
-          { id: '1', name: '销售FCST变化', passed: true },
-          { id: '2', name: '产品生命周期验证', passed: true },
-          { id: '3', name: '需求供应对比', passed: true },
-          { id: '4', name: '销售目标达成对比', passed: false, failCount: 10 },
-          { id: '5', name: '销售FCST vs 客户FCST', passed: true },
-          { id: '6', name: '历史同期趋势偏差', passed: true },
-          { id: '7', name: '重点产品达成分析', passed: true },
-        ];
-        const agentMsg: Message = { 
+        const rules: ValidationRule[] = ANOMALY_RULE_DEFINITIONS
+          .filter(rule => rule.scenes.includes('销售FCST分析') && rule.applicableBUs.includes(buType))
+          .map(rule => ({
+            id: rule.id,
+            name: rule.name,
+            passed: rule.name !== '销售目标达成对比',
+            failCount: rule.name === '销售目标达成对比' ? 10 : undefined,
+          }));
+        const agentMsg: Message = {
           id: (Date.now() + 1).toString(), 
           role: 'agent', 
           content: '正在为您进行校验... 校验已完成，结果如下：', 
@@ -7383,14 +7342,6 @@ export default function App() {
           type: 'change-table',
           data: initialData,
           groupingType: 'customer-size'
-        };
-        setMessages(prev => [...prev, agentMsg]);
-      } else if (text === '自定义维度' || text === '切换更多维度') {
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '可以选择以下热门维度，或自行输入维度组合 + 时间粒度查看聚合结果。支持可选维度如下：\n-字段维度：版本号、BU、应用别、集团客户代码、Model Name、对外版本号、尺寸、大板、面板厂、技术别\n-时间维度：周、月、季、半年、年\n输入示例：技术别维度，按周/月/季/半年/年显示，可展开到Model', 
-          type: 'fcst-dimension-select'
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text === '查询今日外部信息') {
@@ -7787,7 +7738,6 @@ export default function App() {
             <div className="flex flex-col gap-1">
               {((userRole === 'sales-admin' || userRole === 'sales-admin-head') ? [
                 '查看并调整DP',
-                '查询本周DP',
                 '查看客户FCST及其变化',
                 '近期客户FCST异常分析',
                 '查询今日外部信息',
@@ -7796,7 +7746,6 @@ export default function App() {
                 'CRM配置',
               ] : [
                 '调整本周销售fcst',
-                '查询本周销售FCST',
                 '查看客户FCST及其变化',
                 '近期客户FCST异常分析',
                 '查询今日外部信息',
@@ -7810,7 +7759,7 @@ export default function App() {
                   className="flex items-center gap-2 px-2 py-2.5 text-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors text-left group"
                 >
                   <span className="w-1.5 h-1.5 bg-blue-400 rounded-full shrink-0"></span>
-                  <span className="group-hover:font-medium transition-all">{item === '调整本周销售fcst' ? '调整本周销售FCST' : item === '查看并调整DP' ? '调整本周DP' : item === '查询本周DP' ? '查询本周DP' : item === '复盘报告' ? '查看预测复盘报告' : item === 'CRM配置' ? 'CRM基础数据维护' : item}</span>
+                  <span className="group-hover:font-medium transition-all">{item === '调整本周销售fcst' ? '查看FCSTDP' : item === '查看并调整DP' ? '查看FCSTDP' : item === '复盘报告' ? '查看预测复盘报告' : item === 'CRM配置' ? 'CRM基础数据维护' : item}</span>
                 </button>
               ))}
             </div>
@@ -7867,33 +7816,26 @@ export default function App() {
                     <div className="mt-4 w-full overflow-hidden flex flex-col items-start gap-3">
                       <ForecastChangeTable data={forecastData} groupingType={msg.groupingType} />
                       <div className="flex flex-wrap gap-2">
-                        <button 
-                          onClick={() => handleQuickAction('调整本周销售fcst')}
+                        <button
+                          onClick={() => handleQuickAction(
+                            userRole === 'sales' ? '调整本周销售fcst' :
+                            userRole === 'director' ? '查看本周销售fcst' :
+                            userRole === 'sales-admin' ? '查看并调整DP' :
+                            '查看本周DP'
+                          )}
                           className="px-4 py-2 bg-white border border-blue-200 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-50 transition-all shadow-sm flex items-center gap-2"
                         >
                           <Edit2 size={14} />
-                          调整本周客户 FCST
+                          查看FCSTDP
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleQuickAction(msg.groupingType === 'tech' ? '查看客户&尺寸维度的客户FCST变化情况' : '查看技术别维度的客户FCST变化情况')}
                           className="px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-50 transition-all shadow-sm flex items-center gap-2"
                         >
                           <RefreshCw size={14} />
                           {msg.groupingType === 'tech' ? '切换客户&尺寸维度' : '切换技术别维度'}
                         </button>
-                        <button 
-                          onClick={() => handleQuickAction('切换更多维度')}
-                          className="px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-50 transition-all shadow-sm flex items-center gap-2"
-                        >
-                          <Layers size={14} />
-                          切换更多维度
-                        </button>
                       </div>
-                    </div>
-                  )}
-                  {msg.type === 'fcst-dimension-select' && (
-                    <div className="mt-4 w-full overflow-hidden">
-                      <ForecastDimensionSelect onSelect={processMessage} />
                     </div>
                   )}
                   {msg.type === 'data-item-select' && (
@@ -8168,7 +8110,7 @@ export default function App() {
                 onClick={() => handleQuickAction('调整本周销售fcst')}
                 className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
               >
-                查看并调整本周销售fcst
+                查看FCSTDP
               </button>
             )}
             {userRole === 'director' && (
@@ -8184,7 +8126,7 @@ export default function App() {
                 onClick={() => handleQuickAction('查看并调整DP')}
                 className="whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
               >
-                查看并调整DP
+                查看FCSTDP
               </button>
             )}
             {userRole === 'sales-admin-head' && (
