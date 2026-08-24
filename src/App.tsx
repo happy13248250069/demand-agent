@@ -419,7 +419,7 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'data-item-select' | 'data-item-select-dp' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
+  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'rule-detail-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'data-item-select' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
   buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
@@ -544,7 +544,8 @@ const ANOMALY_RULE_DEFINITIONS: AnomalyRuleDefinition[] = [
       ruleKey: 'lifecycle', title: '产品生命周期状态验证',
       fixedRules: [
         'EOP后仍有客户FCST提报，自动触发高呆滞风险预警，提示销售核查是否错报（此规则不可修改）',
-        '量产产品M+6内无任何需求，自动触发产品EOL风险预警（此规则不可修改）'
+        '量产产品M+6内无任何需求，自动触发产品EOL风险预警（此规则不可修改）',
+        'GA前有客户FCST提报，自动触发提前需求异常预警，提示销售核查是否提前导入（此规则不可修改）'
       ],
     }
   },
@@ -563,7 +564,7 @@ const ANOMALY_RULE_DEFINITIONS: AnomalyRuleDefinition[] = [
   },
   {
     id: 'target', name: '销售目标达成对比', applicableBUs: BU_ALL,
-    dimTV: '客户+尺寸', dimIT: '客户+技术别', dimMC: '客户+技术别',
+    dimTV: '应用别+面板厂', dimIT: '应用别+面板厂', dimMC: '应用别+面板厂',
     timeGranularity: '月+季度', parameterSummary: '达成率≤95%',
     scenes: ['销售FCST分析', 'DP分析'],
     drawerConfig: {
@@ -3371,30 +3372,46 @@ const MNTForecastTable = ({ data: initialData, onAction }: { data: ForecastRow[]
   );
 };
 
-const SalesTargetComparisonTable = () => {
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [weeksCollapsed, setWeeksCollapsed] = useState(false);
+const SalesTargetComparisonTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [monthsCollapsed, setMonthsCollapsed] = useState(false);
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const appFamily = (buType === 'TV' || buType === 'CID') ? 'TV' : (buType === 'MNT' || buType === 'NB') ? 'IT' : 'MC';
+  const PANEL_CODE: Record<string, string> = { '京东方': 't1', 'TCL华星': 't2', '惠科': 't3' };
 
-  const weeklyHeaders = [
-    { label: 'WK1 260101-07', isWeek: true },
-    { label: 'WK2 260108-14', isWeek: true },
-    { label: 'WK3 260115-21', isWeek: true },
-    { label: 'WK4 260122-31', isWeek: true },
-    { label: 'M2601', isWeek: false },
-    { label: 'WK5 260201-07', isWeek: true },
-    { label: 'WK6 260208-14', isWeek: true },
-    { label: 'M2602', isWeek: false },
-    { label: 'WK7 260301-07', isWeek: true },
-    { label: 'WK8 260308-14', isWeek: true },
-    { label: 'M2603', isWeek: false },
+  // 时间范围 M+6 by 月/季度：当前为 2026年8月，M+6 覆盖 2608~2702 共7个月
+  // 按自然季度分组插入季度小计列；26Q3/27Q1 落在窗口边界，小计仅汇总窗口内可用的月份（2个月），26Q4 为完整季度（3个月）
+  const MONTHS = [
+    { key: '2608', quarter: '26Q3' },
+    { key: '2609', quarter: '26Q3' },
+    { key: '2610', quarter: '26Q4' },
+    { key: '2611', quarter: '26Q4' },
+    { key: '2612', quarter: '26Q4' },
+    { key: '2701', quarter: '27Q1' },
+    { key: '2702', quarter: '27Q1' },
   ];
 
+  const periodHeaders: { label: string; isMonth: boolean; monthIndexes: number[] }[] = [];
+  {
+    let cursor = 0;
+    while (cursor < MONTHS.length) {
+      const q = MONTHS[cursor].quarter;
+      const idxs: number[] = [];
+      while (cursor < MONTHS.length && MONTHS[cursor].quarter === q) {
+        periodHeaders.push({ label: MONTHS[cursor].key, isMonth: true, monthIndexes: [cursor] });
+        idxs.push(cursor);
+        cursor++;
+      }
+      periodHeaders.push({ label: q, isMonth: false, monthIndexes: idxs });
+    }
+  }
+
+  const sumByIndexes = (arr: number[], indexes: number[]) => indexes.reduce((s, i) => s + arr[i], 0);
+
   const allColumns = [
-    { id: 'customer', label: '集团客户名称' },
-    { id: 'sizeModel', label: '尺寸 / Model' },
+    { id: 'app', label: '应用别' },
+    { id: 'panel', label: '面板厂' },
     { id: 'dataItem', label: '数据项' },
-    ...weeklyHeaders.map(h => ({ id: h.label, label: h.label }))
+    ...periodHeaders.map(h => ({ id: h.label, label: h.label }))
   ];
 
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
@@ -3409,59 +3426,88 @@ const SalesTargetComparisonTable = () => {
     setVisibleColumns(next);
   };
 
-  const toggleGroup = (customer: string, size: string) => {
-    const key = `${customer}-${size}`;
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(key)) {
-      newExpanded.delete(key);
-    } else {
-      newExpanded.add(key);
-    }
-    setExpandedGroups(newExpanded);
-  };
-
+  // 每个应用别+面板厂分组下拆成 3 行：销量预测(ETA)、销量计划BP/RP、达成率与缺口
+  // 达成率 = 销量预测 / 销量计划BP/RP；缺口绝对值 = 销量预测 - 销量计划BP/RP；阈值：达成率 ≤ 95% 触发预警（红色高亮）
   const groupedData = [
     {
-      customer: '小米',
-      size: '55寸',
-      total: { item: '销售FCST VS 销量计划BP/RP', values: ['180 (+30, 20%)', '90 (+10, 13%)', '100', '400', '400', '400', '100 (+40, 40%)', '1200', 'MK', 'MK', 'MK'] },
-      models: [
-        { name: 'Model A V1.1', values: ['60 (+10, 20%)', '30 (+5, 20%)', '30', '130', '130', '130', '30 (+10, 50%)', '400', 'MK', 'MK', 'MK'] },
-        { name: 'Model B V1.1', values: ['120 (+20, 20%)', '60 (+5, 9%)', '70', '270', '270', '270', '70 (+30, 75%)', '800', 'MK', 'MK', 'MK'] },
-      ]
+      app: 'TV',
+      panel: '京东方',
+      forecast: [380, 430, 360, 400, 410, 390, 400],
+      target: [400, 400, 400, 400, 400, 400, 400],
     },
     {
-      customer: '小米',
-      size: '35寸',
-      total: { item: '销售FCST VS 销量计划BP/RP', values: ['150', '100', '100', '400', '400', '400', '350', '1200', 'MK', 'MK', 'MK'] },
-      models: [
-        { name: 'Model C V1.1', values: ['150', '100', '100', '400', '400', '400', '350', '1200', 'MK', 'MK', 'MK'] },
-      ]
+      app: 'TV',
+      panel: 'TCL华星',
+      forecast: [300, 280, 260, 300, 300, 300, 300],
+      target: [300, 300, 300, 300, 300, 300, 300],
     },
     {
-      customer: '华为',
-      size: '55寸',
-      total: { item: '销售FCST VS 销量计划BP/RP', values: ['300', '300', '300', '1200', '1200', '1200', '900', '3600', 'MK', 'MK', 'MK'] },
-      models: [
-        { name: 'Model D V1.1', values: ['150', '150', '150', '600', '600', '600', '450', '1800', 'MK', 'MK', 'MK'] },
-        { name: 'Model E V1.1', values: ['150', '150', '150', '600', '600', '600', '450', '1800', 'MK', 'MK', 'MK'] },
-      ]
-    }
-  ];
+      app: 'IT',
+      panel: '京东方',
+      forecast: [150, 140, 130, 150, 150, 150, 150],
+      target: [150, 150, 150, 150, 150, 150, 150],
+    },
+    {
+      app: 'IT',
+      panel: 'TCL华星',
+      forecast: [220, 200, 190, 220, 220, 220, 220],
+      target: [220, 220, 220, 220, 220, 220, 220],
+    },
+    {
+      app: 'MC',
+      panel: '京东方',
+      forecast: [90, 100, 85, 95, 95, 95, 95],
+      target: [100, 100, 100, 100, 100, 100, 100],
+    },
+    {
+      app: 'MC',
+      panel: 'TCL华星',
+      forecast: [120, 110, 100, 120, 120, 120, 120],
+      target: [120, 120, 120, 120, 120, 120, 120],
+    },
+  ].filter(g => g.app === appFamily);
 
-  // Modified headers to include weeks and month abbreviations
-  // (already defined above)
+  const RATE_THRESHOLD = 95;
+
+  const renderValueCell = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">
+      {val}
+    </td>
+  );
+
+  const renderRateCell = (key: string, forecastVal: number, targetVal: number) => {
+    const rate = targetVal === 0 ? 100 : Math.round((forecastVal / targetVal) * 100);
+    const gap = forecastVal - targetVal;
+    const isBelowThreshold = rate <= RATE_THRESHOLD;
+    return (
+      <td
+        key={key}
+        className={`border border-gray-200 p-2 text-center ${isBelowThreshold ? 'bg-red-50' : ''}`}
+      >
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${isBelowThreshold ? 'text-red-600' : 'text-gray-900'}`}>{rate}%</span>
+          <span className={`text-[10px] font-bold ${isBelowThreshold ? 'text-red-500' : 'text-gray-400'}`}>
+            {gap > 0 ? `+${gap}` : gap}
+          </span>
+        </div>
+      </td>
+    );
+  };
+
+  const visiblePeriodIndexes = periodHeaders
+    .map((h, i) => ({ h, i }))
+    .filter(({ h }) => (!monthsCollapsed || !h.isMonth) && visibleColumns.has(h.label));
 
   return (
     <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
       <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
           <BarChart3 size={18} className="text-blue-600" />
-          本周客户FCST及其变化
+          销售目标达成对比
         </h3>
         <div className="flex items-center gap-2">
           <div className="relative">
-            <button 
+            <button
               onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)}
               className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90"
               title="表格设置"
@@ -3473,7 +3519,7 @@ const SalesTargetComparisonTable = () => {
                 <>
                   {/* Backdrop to close */}
                   <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -3483,9 +3529,9 @@ const SalesTargetComparisonTable = () => {
                     <div className="max-h-60 overflow-y-auto relative z-50">
                       {allColumns.map(col => (
                         <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
-                          <input 
-                            type="checkbox" 
-                            checked={visibleColumns.has(col.id)} 
+                          <input
+                            type="checkbox"
+                            checked={visibleColumns.has(col.id)}
                             onChange={() => toggleColumn(col.id)}
                             className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
                           />
@@ -3498,18 +3544,261 @@ const SalesTargetComparisonTable = () => {
               )}
             </AnimatePresence>
           </div>
-          <button 
+          <button
             className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90"
             title="导出当前数据"
           >
             <Download size={16} />
           </button>
-          <button 
-            onClick={() => setWeeksCollapsed(!weeksCollapsed)}
+          <button
+            onClick={() => setMonthsCollapsed(!monthsCollapsed)}
             className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold border border-blue-100 hover:bg-blue-100 transition-all flex items-center gap-1"
           >
-            {weeksCollapsed ? <Eye size={14} /> : <EyeOff size={14} />}
-            {weeksCollapsed ? '展开周次' : '缩起周次'}
+            {monthsCollapsed ? <Eye size={14} /> : <EyeOff size={14} />}
+            {monthsCollapsed ? '展开月度' : '仅看季度'}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('app') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[70px]">应用别</th>}
+              {visibleColumns.has('panel') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[90px]">面板厂</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {visiblePeriodIndexes.map(({ h, i }) => (
+                <th key={i} className={`border border-gray-200 p-1 font-bold min-w-[80px] ${h.isMonth ? 'bg-white text-gray-600' : 'bg-blue-50 text-blue-700'}`}>
+                  {h.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                {/* 销量预测(ETA) */}
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('app') && (
+                    <td rowSpan={3} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.app}</td>
+                  )}
+                  {visibleColumns.has('panel') && (
+                    <td rowSpan={3} className="border border-gray-200 p-2 text-center font-medium text-gray-700 align-middle">{PANEL_CODE[group.panel] ?? group.panel}</td>
+                  )}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">销量预测(ETA)</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValueCell(`f-${i}`, sumByIndexes(group.forecast, h.monthIndexes)))}
+                </tr>
+                {/* 销量计划BP/RP */}
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">销量计划BP/RP</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValueCell(`t-${i}`, sumByIndexes(group.target, h.monthIndexes)))}
+                </tr>
+                {/* 达成率 / 缺口 */}
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率 / 缺口</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRateCell(`r-${i}`, sumByIndexes(group.forecast, h.monthIndexes), sumByIndexes(group.target, h.monthIndexes)))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        达成率 ≤ {RATE_THRESHOLD}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// --- 规则详情通用小工具（各组件自包含使用，不抽共享引擎） ---
+const ruleDim = (buType: AnomalyBU, dimTV: string, dimIT: string, dimMC: string) =>
+  (buType === 'TV' || buType === 'CID') ? dimTV : (buType === 'MNT' || buType === 'NB') ? dimIT : dimMC;
+
+// 近期周维度展示列：WK31~WK49共19个真实周，按月分组+月度小计（WK36/WK40跨月拆成两列），锚点2026-08-23（当周WK35第一天）
+const NEAR_TERM_WEEK_COLUMNS = [
+  { key: 'wk31', label: 'WK31', sub: '260801-01' }, { key: 'wk32', label: 'WK32', sub: '260802-08' },
+  { key: 'wk33', label: 'WK33', sub: '260809-15' }, { key: 'wk34', label: 'WK34', sub: '260816-22' },
+  { key: 'wk35', label: 'WK35', sub: '260823-29' },
+  { key: 'wk36a', label: 'WK36', sub: '260830-31' }, { key: 'm2608', label: 'M26-08', sub: '' }, { key: 'wk36b', label: 'WK36', sub: '260901-05' },
+  { key: 'wk37', label: 'WK37', sub: '260906-12' }, { key: 'wk38', label: 'WK38', sub: '260913-19' }, { key: 'wk39', label: 'WK39', sub: '260920-26' },
+  { key: 'wk40a', label: 'WK40', sub: '260927-30' }, { key: 'm2609', label: 'M26-09', sub: '' }, { key: 'wk40b', label: 'WK40', sub: '261001-03' },
+  { key: 'wk41', label: 'WK41', sub: '261004-10' }, { key: 'wk42', label: 'WK42', sub: '261011-17' },
+  { key: 'wk43', label: 'WK43', sub: '261018-24' }, { key: 'wk44', label: 'WK44', sub: '261025-31' }, { key: 'm2610', label: 'M26-10', sub: '' },
+  { key: 'wk45', label: 'WK45', sub: '261101-07' }, { key: 'wk46', label: 'WK46', sub: '261108-14' }, { key: 'wk47', label: 'WK47', sub: '261115-21' },
+  { key: 'wk48', label: 'WK48', sub: '261122-28' }, { key: 'wk49', label: 'WK49', sub: '261129-30' }, { key: 'm2611', label: 'M26-11', sub: '' },
+];
+// 与NEAR_TERM_WEEK_COLUMNS一一对应；仅WK35及跨月拆出的WK36两列标记锁定期（当前+下一周锁定惯例），月小计列恒为false
+const NEAR_TERM_LOCKED = [
+  false, false, false, false,
+  true,
+  true, false, true,
+  false, false, false,
+  false, false, false,
+  false, false,
+  false, false, false,
+  false, false, false, false, false, false,
+];
+// 19个真实周值(WK31~WK49) -> 25个展示列的值：WK36按2/7、5/7天数比例拆分(8月30-31共2天/9月1-5共5天)，WK40按4/7、3/7拆分(9月27-30共4天/10月1-3共3天)，月小计=该月内展示列之和
+const expandWeeksToColumns = (weeks: number[]) => {
+  const [w31, w32, w33, w34, w35, w36, w37, w38, w39, w40, w41, w42, w43, w44, w45, w46, w47, w48, w49] = weeks;
+  const wk36a = Math.round(w36 * 2 / 7);
+  const wk36b = w36 - wk36a;
+  const wk40a = Math.round(w40 * 4 / 7);
+  const wk40b = w40 - wk40a;
+  const m2608 = w31 + w32 + w33 + w34 + w35 + wk36a;
+  const m2609 = wk36b + w37 + w38 + w39 + wk40a;
+  const m2610 = wk40b + w41 + w42 + w43 + w44;
+  const m2611 = w45 + w46 + w47 + w48 + w49;
+  return [
+    w31, w32, w33, w34, w35,
+    wk36a, m2608, wk36b,
+    w37, w38, w39,
+    wk40a, m2609, wk40b,
+    w41, w42, w43, w44, m2610,
+    w45, w46, w47, w48, w49, m2611,
+  ];
+};
+
+// 客户FCST变化识别：客户+尺寸(TV) / 客户+技术别(IT) / 客户+技术别+尺寸(MC)
+const CustomerFcstChangeTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const isITFamily = buType === 'MNT' || buType === 'NB';
+  const dimLabel = isTVFamily ? '尺寸' : isITFamily ? '技术别' : '技术别+尺寸';
+
+  const MONTHS = ['2612', '2701', '2702'];
+
+  const groupedData = isTVFamily ? [
+    {
+      customer: '小米集团_TV', dim: '55寸',
+      weekCur: [420,420,420,420,420,415,400,390,405,405,405,405,405,405,405,405,405,405,405], weekPrev: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400],
+      monthCur: [400, 410, 405], monthPrev: [400, 400, 400],
+      models: [
+        { name: 'Model A', weekCur: [180,180,180,180,180,175,170,165,175,175,175,175,175,175,175,175,175,175,175], weekPrev: [170,170,170,170,170,170,170,170,170,170,170,170,170,170,170,170,170,170,170], monthCur: [170, 175, 172], monthPrev: [170, 170, 170] },
+      ]
+    },
+    {
+      customer: '华为集团_TV', dim: '35寸',
+      weekCur: [150,150,150,150,150,148,130,128,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150],
+      monthCur: [150, 130, 128], monthPrev: [150, 150, 150],
+      models: [
+        { name: 'Model C', weekCur: [150,150,150,150,150,148,130,128,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [150, 130, 128], monthPrev: [150, 150, 150] },
+      ]
+    },
+  ] : isITFamily ? [
+    {
+      customer: '华硕集团_IT', dim: 'IPS',
+      weekCur: [260,260,260,260,260,255,240,235,245,245,245,245,245,245,245,245,245,245,245], weekPrev: [250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250],
+      monthCur: [250, 245, 240], monthPrev: [250, 250, 250],
+      models: [
+        { name: 'Model P', weekCur: [130,130,130,130,130,128,120,118,122,122,122,122,122,122,122,122,122,122,122], weekPrev: [125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125], monthCur: [125, 122, 120], monthPrev: [125, 125, 125] },
+      ]
+    },
+    {
+      customer: '联想集团_IT', dim: 'TN',
+      weekCur: [140,140,140,140,140,138,118,115,120,120,120,120,120,120,120,120,120,120,120], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140],
+      monthCur: [140, 118, 115], monthPrev: [140, 140, 140],
+      models: [
+        { name: 'Model Q', weekCur: [140,140,140,140,140,138,118,115,120,120,120,120,120,120,120,120,120,120,120], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [140, 118, 115], monthPrev: [140, 140, 140] },
+      ]
+    },
+  ] : [
+    {
+      customer: '比亚迪集团_MC', dim: 'OLED 12.3寸',
+      weekCur: [95,95,95,95,95,93,88,86,90,90,90,90,90,90,90,90,90,90,90], weekPrev: [90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90],
+      monthCur: [90, 88, 86], monthPrev: [90, 90, 90],
+      models: [
+        { name: 'Model V', weekCur: [95,95,95,95,95,93,88,86,90,90,90,90,90,90,90,90,90,90,90], weekPrev: [90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90], monthCur: [90, 88, 86], monthPrev: [90, 90, 90] },
+      ]
+    },
+    {
+      customer: '蔚来集团_MC', dim: 'LCD 10.25寸',
+      weekCur: [60,60,60,60,60,58,50,48,52,52,52,52,52,52,52,52,52,52,52], weekPrev: [60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60],
+      monthCur: [60, 50, 48], monthPrev: [60, 60, 60],
+      models: [
+        { name: 'Model W', weekCur: [60,60,60,60,60,58,50,48,52,52,52,52,52,52,52,52,52,52,52], weekPrev: [60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60], monthCur: [60, 50, 48], monthPrev: [60, 60, 60] },
+      ]
+    },
+  ];
+  const MONTHLY_TH = 5;
+
+  const allColumns = [
+    { id: 'customer', label: '集团客户名称' },
+    { id: 'dim', label: `${dimLabel} / Model` },
+    { id: 'dataItem', label: '数据项' },
+    ...NEAR_TERM_WEEK_COLUMNS.map(c => ({ id: c.key, label: c.label })),
+    ...MONTHS.map(m => ({ id: m, label: m })),
+  ];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => {
+    const next = new Set(visibleColumns);
+    if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); }
+    setVisibleColumns(next);
+  };
+  const toggleGroup = (key: string) => {
+    const next = new Set(expandedGroups);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setExpandedGroups(next);
+  };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+
+  const renderChange = (key: string, cur: number, prev: number, threshold: number, locked: boolean) => {
+    const diff = cur - prev;
+    const pct = prev === 0 ? 0 : Math.round((diff / prev) * 1000) / 10;
+    const over = Math.abs(pct) >= threshold;
+    const hi = locked || over;
+    const bg = locked ? 'bg-amber-50' : over ? 'bg-red-50' : '';
+    const fg = locked ? 'text-amber-600' : over ? 'text-red-600' : 'text-gray-900';
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${bg}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${fg}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${hi ? (locked ? 'text-amber-500' : 'text-red-500') : 'text-gray-400'}`}>
+            {diff > 0 ? `+${diff}` : diff}{locked ? ' 锁定期' : ''}
+          </span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+          <Activity size={18} className="text-blue-600" />
+          客户FCST变化识别
+        </h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置">
+              <Settings size={16} />
+            </button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据">
+            <Download size={16} />
           </button>
         </div>
       </div>
@@ -3518,92 +3807,548 @@ const SalesTargetComparisonTable = () => {
           <thead className="bg-gray-50 sticky top-0 z-20">
             <tr>
               {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
-              {visibleColumns.has('sizeModel') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[100px]">尺寸 / Model</th>}
-              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[120px]">数据项</th>}
-              {weeklyHeaders.map((h, i) => (
-                (!weeksCollapsed || !h.isWeek) && visibleColumns.has(h.label) && (
-                  <th key={i} className={`border border-gray-200 p-1 font-bold min-w-[100px] ${h.isWeek ? 'bg-white text-gray-600' : 'bg-blue-50 text-blue-700'}`}>
-                    {h.label}
-                  </th>
-                )
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[110px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && (
+                <th key={col.key} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${col.label.startsWith('M') ? 'bg-blue-50 text-blue-700' : NEAR_TERM_LOCKED[i] ? 'bg-amber-50 text-amber-700' : 'bg-white text-gray-600'}`}>
+                  <div>{col.label}</div>
+                  {col.sub && <div className="text-[10px] font-normal opacity-70">{col.sub}</div>}
+                </th>
               ))}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
             </tr>
           </thead>
           <tbody>
             {groupedData.map((group, gIdx) => {
-              const isExpanded = expandedGroups.has(`${group.customer}-${group.size}`);
-              
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              const weekCurCols = expandWeeksToColumns(group.weekCur);
+              const weekPrevCols = expandWeeksToColumns(group.weekPrev);
               return (
                 <React.Fragment key={gIdx}>
-                  {/* Total Row */}
                   <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
-                    {visibleColumns.has('customer') && <td className="border border-gray-200 p-2 text-center font-bold text-gray-800">{group.customer}</td>}
-                    {visibleColumns.has('sizeModel') && (
-                      <td className="border border-gray-200 p-2">
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-gray-700">{group.size}</span>
-                          <button 
-                            onClick={() => toggleGroup(group.customer, group.size)}
-                            className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600"
-                          >
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">
                             {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           </button>
                         </div>
                       </td>
                     )}
-                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">{group.total.item}</td>}
-                    {group.total.values.map((val, vIdx) => {
-                      const h = weeklyHeaders[vIdx];
-                      if (weeksCollapsed && h?.isWeek) return null;
-                      if (!visibleColumns.has(h.label)) return null;
-                      const hasChange = val.includes('(');
-                      return (
-                        <td key={vIdx} className="border border-gray-200 p-2 text-center">
-                          <div className="flex flex-col items-center justify-center">
-                            <span className="font-medium text-gray-900">{val.split(' ')[0]}</span>
-                            {hasChange && (
-                              <span className="text-[10px] text-green-600 font-bold">
-                                {val.substring(val.indexOf('('))}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本期FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wv-${i}`, weekCurCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mv-${i}`, group.monthCur[i]))}
                   </tr>
-
-                  {/* Model Rows */}
-                  {isExpanded && group.models.map((model, mIdx) => (
-                    <tr key={mIdx} className="bg-white hover:bg-gray-50 transition-colors">
-                      {visibleColumns.has('customer') && <td className="border border-gray-200 p-2 text-center font-medium text-gray-400 opacity-50">{group.customer}</td>}
-                      {visibleColumns.has('sizeModel') && (
-                        <td className="border border-gray-200 p-2 text-blue-600 font-medium pl-6">
-                          <div className="flex items-center gap-1">
-                            <ChevronRight size={10} className="text-gray-300" />
-                            {model.name}
-                          </div>
-                        </td>
-                      )}
-                      {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">{group.total.item}</td>}
-                      {model.values.map((val, vIdx) => {
-                        const h = weeklyHeaders[vIdx];
-                        if (weeksCollapsed && h?.isWeek) return null;
-                        if (!visibleColumns.has(h.label)) return null;
-                        const hasChange = val.includes('(');
-                        return (
-                          <td key={vIdx} className="border border-gray-200 p-2 text-center">
-                            <div className="flex flex-col items-center justify-center">
-                              <span className="font-medium text-gray-900">{val.split(' ')[0]}</span>
-                              {hasChange && (
-                                <span className="text-[10px] text-green-600 font-bold">
-                                  {val.substring(val.indexOf('('))}
-                                </span>
-                              )}
-                            </div>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">上期FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wp-${i}`, weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mp-${i}`, group.monthPrev[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">变化量 / 变化幅度</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`wc-${i}`, weekCurCols[i], weekPrevCols[i], MONTHLY_TH, col.label.startsWith('M') ? false : NEAR_TERM_LOCKED[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mc-${i}`, group.monthCur[i], group.monthPrev[i], MONTHLY_TH, false))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => {
+                    const mWeekCurCols = expandWeeksToColumns(model.weekCur);
+                    const mWeekPrevCols = expandWeeksToColumns(model.weekPrev);
+                    return (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && (
+                          <td rowSpan={modelRows} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle">
+                            <div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div>
                           </td>
-                        );
-                      })}
-                    </tr>
+                        )}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">本期FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwv-${i}`, mWeekCurCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmv-${i}`, model.monthCur[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">上期FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwp-${i}`, mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmp-${i}`, model.monthPrev[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">变化量 / 变化幅度</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`mwc-${i}`, mWeekCurCols[i], mWeekPrevCols[i], MONTHLY_TH, col.label.startsWith('M') ? false : NEAR_TERM_LOCKED[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mmc-${i}`, model.monthCur[i], model.monthPrev[i], MONTHLY_TH, false))}
+                      </tr>
+                    </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-4 text-[11px] text-gray-500">
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-50 border border-amber-200 inline-block"></span>锁定期（21-45天）内变更，固定触发预警</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>锁定期外：变化幅度≥±{MONTHLY_TH}% 高亮</span>
+      </div>
+    </div>
+  );
+};
+
+// 销售FCST变化识别：客户+尺寸(TV) / 客户+技术别(IT/MC)
+const SalesFcstChangeTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const dimLabel = isTVFamily ? '尺寸' : '技术别';
+  const MONTHS = ['2612', '2701', '2702'];
+  const CHANGE_TH = 10;
+
+  const groupedData = isTVFamily ? [
+    { customer: '小米集团_TV', dim: '55寸', weekCur: [400,400,400,400,400,405,395,380,390,390,390,390,390,390,390,390,390,390,390], weekPrev: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400], monthCur: [400, 395, 380], monthPrev: [400, 400, 400],
+      models: [{ name: 'Model A', weekCur: [180,180,180,180,180,182,178,170,175,175,175,175,175,175,175,175,175,175,175], weekPrev: [180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180], monthCur: [180, 178, 170], monthPrev: [180, 180, 180] }] },
+    { customer: '华为集团_TV', dim: '35寸', weekCur: [150,150,150,150,150,148,130,128,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [150, 130, 128], monthPrev: [150, 150, 150],
+      models: [{ name: 'Model C', weekCur: [150,150,150,150,150,148,130,128,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [150, 130, 128], monthPrev: [150, 150, 150] }] },
+  ] : [
+    { customer: '华硕集团_IT', dim: 'IPS', weekCur: [250,250,250,250,250,252,240,235,242,242,242,242,242,242,242,242,242,242,242], weekPrev: [250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250], monthCur: [250, 240, 235], monthPrev: [250, 250, 250],
+      models: [{ name: 'Model P', weekCur: [125,125,125,125,125,126,120,118,121,121,121,121,121,121,121,121,121,121,121], weekPrev: [125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125], monthCur: [125, 120, 118], monthPrev: [125, 125, 125] }] },
+    { customer: '联想集团_IT', dim: 'TN', weekCur: [140,140,140,140,140,138,118,115,120,120,120,120,120,120,120,120,120,120,120], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [140, 118, 115], monthPrev: [140, 140, 140],
+      models: [{ name: 'Model Q', weekCur: [140,140,140,140,140,138,118,115,120,120,120,120,120,120,120,120,120,120,120], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [140, 118, 115], monthPrev: [140, 140, 140] }] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'dim', label: `${dimLabel} / Model` }, { id: 'dataItem', label: '数据项' },
+    ...NEAR_TERM_WEEK_COLUMNS.map(c => ({ id: c.key, label: c.label })), ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const toggleGroup = (key: string) => { const next = new Set(expandedGroups); next.has(key) ? next.delete(key) : next.add(key); setExpandedGroups(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderChange = (key: string, cur: number, prev: number, locked: boolean) => {
+    const diff = cur - prev;
+    const pct = prev === 0 ? 0 : Math.round((diff / prev) * 1000) / 10;
+    const over = Math.abs(pct) >= CHANGE_TH;
+    const bg = locked || over ? 'bg-red-50' : '';
+    const fg = locked || over ? 'text-red-600' : 'text-gray-900';
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${bg}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${fg}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${locked || over ? 'text-red-500' : 'text-gray-400'}`}>{diff > 0 ? `+${diff}` : diff}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Activity size={18} className="text-blue-600" />销售FCST变化识别</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[110px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && (
+                <th key={col.key} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${col.label.startsWith('M') ? 'bg-blue-50 text-blue-700' : NEAR_TERM_LOCKED[i] ? 'bg-red-50 text-red-700' : 'bg-white text-gray-600'}`}>
+                  <div>{col.label}</div>
+                  {col.sub && <div className="text-[10px] font-normal opacity-70">{col.sub}</div>}
+                </th>
+              ))}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              const weekCurCols = expandWeeksToColumns(group.weekCur);
+              const weekPrevCols = expandWeeksToColumns(group.weekPrev);
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本版销售FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wv-${i}`, weekCurCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mv-${i}`, group.monthCur[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">上版销售FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wp-${i}`, weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mp-${i}`, group.monthPrev[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">变化量 / 变化幅度</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`wc-${i}`, weekCurCols[i], weekPrevCols[i], col.label.startsWith('M') ? false : NEAR_TERM_LOCKED[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mc-${i}`, group.monthCur[i], group.monthPrev[i], false))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => {
+                    const mWeekCurCols = expandWeeksToColumns(model.weekCur);
+                    const mWeekPrevCols = expandWeeksToColumns(model.weekPrev);
+                    return (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && <td rowSpan={modelRows} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle"><div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div></td>}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">本版销售FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwv-${i}`, mWeekCurCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmv-${i}`, model.monthCur[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">上版销售FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwp-${i}`, mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmp-${i}`, model.monthPrev[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">变化量 / 变化幅度</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`mwc-${i}`, mWeekCurCols[i], mWeekPrevCols[i], col.label.startsWith('M') ? false : NEAR_TERM_LOCKED[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mmc-${i}`, model.monthCur[i], model.monthPrev[i], false))}
+                      </tr>
+                    </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-4 text-[11px] text-gray-500">
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>锁定期（21-45天）内变更，或锁定期外变化幅度≥±{CHANGE_TH}%，均高亮触发预警</span>
+      </div>
+    </div>
+  );
+};
+
+// 销售FCST vs 客户FCST：客户+尺寸(TV) / 客户+技术别(IT/MC)
+const SalesVsCustomerFcstTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const dimLabel = isTVFamily ? '尺寸' : '技术别';
+  const MONTHS = ['2612', '2701', '2702'];
+  const DEV_TH = 10;
+
+  const groupedData = isTVFamily ? [
+    { customer: '小米集团_TV', dim: '55寸', weekSales: [420,420,420,420,420,415,400,405,410,410,410,410,410,410,410,410,410,410,410], weekCust: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400], monthSales: [420, 400, 405], monthCust: [400, 400, 400],
+      models: [{ name: 'Model A', weekSales: [190,190,190,190,190,188,180,182,185,185,185,185,185,185,185,185,185,185,185], weekCust: [180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180], monthSales: [190, 180, 182], monthCust: [180, 180, 180] }] },
+    { customer: '华为集团_TV', dim: '35寸', weekSales: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekCust: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthSales: [130, 132, 130], monthCust: [150, 150, 150],
+      models: [{ name: 'Model C', weekSales: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekCust: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthSales: [130, 132, 130], monthCust: [150, 150, 150] }] },
+  ] : [
+    { customer: '华硕集团_IT', dim: 'IPS', weekSales: [270,270,270,270,270,268,260,262,265,265,265,265,265,265,265,265,265,265,265], weekCust: [250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250], monthSales: [270, 260, 262], monthCust: [250, 250, 250],
+      models: [{ name: 'Model P', weekSales: [135,135,135,135,135,134,130,131,132,132,132,132,132,132,132,132,132,132,132], weekCust: [125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125], monthSales: [135, 130, 131], monthCust: [125, 125, 125] }] },
+    { customer: '联想集团_IT', dim: 'TN', weekSales: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekCust: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthSales: [118, 120, 118], monthCust: [140, 140, 140],
+      models: [{ name: 'Model Q', weekSales: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekCust: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthSales: [118, 120, 118], monthCust: [140, 140, 140] }] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'dim', label: `${dimLabel} / Model` }, { id: 'dataItem', label: '数据项' },
+    ...NEAR_TERM_WEEK_COLUMNS.map(c => ({ id: c.key, label: c.label })), ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const toggleGroup = (key: string) => { const next = new Set(expandedGroups); next.has(key) ? next.delete(key) : next.add(key); setExpandedGroups(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderDeviation = (key: string, sales: number, cust: number) => {
+    const diff = sales - cust;
+    const pct = cust === 0 ? 0 : Math.round((diff / cust) * 1000) / 10;
+    const over = pct >= DEV_TH || pct <= -DEV_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{diff > 0 ? `+${diff}` : diff}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Layers size={18} className="text-blue-600" />销售FCST vs 客户FCST</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[110px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && (
+                <th key={col.key} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${col.label.startsWith('M') ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600'}`}>
+                  <div>{col.label}</div>
+                  {col.sub && <div className="text-[10px] font-normal opacity-70">{col.sub}</div>}
+                </th>
+              ))}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              const weekSalesCols = expandWeeksToColumns(group.weekSales);
+              const weekCustCols = expandWeeksToColumns(group.weekCust);
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">销售FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`sw-${i}`, weekSalesCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`sm-${i}`, group.monthSales[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">客户FCST</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`cw-${i}`, weekCustCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`cm-${i}`, group.monthCust[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">差异量 / 差异比例</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderDeviation(`dw-${i}`, weekSalesCols[i], weekCustCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderDeviation(`dm-${i}`, group.monthSales[i], group.monthCust[i]))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => {
+                    const mWeekSalesCols = expandWeeksToColumns(model.weekSales);
+                    const mWeekCustCols = expandWeeksToColumns(model.weekCust);
+                    return (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && <td rowSpan={modelRows} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle"><div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div></td>}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">销售FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`msw-${i}`, mWeekSalesCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`msm-${i}`, model.monthSales[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">客户FCST</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mcw-${i}`, mWeekCustCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mcm-${i}`, model.monthCust[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">差异量 / 差异比例</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderDeviation(`mdw-${i}`, mWeekSalesCols[i], mWeekCustCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderDeviation(`mdm-${i}`, model.monthSales[i], model.monthCust[i]))}
+                      </tr>
+                    </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        差异比例 ≥ +{DEV_TH}% 或 ≤ -{DEV_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 需求供应对比：客户+尺寸(TV) / 客户+技术别(IT/MC)；供应口径 TV/IT=Supply/Allocation，MC=Supply
+const SupplyDemandCompareTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const isITFamily = buType === 'MNT' || buType === 'NB';
+  const dimLabel = isTVFamily ? '尺寸' : '技术别';
+  const supplyLabel = (isTVFamily || isITFamily) ? 'Supply/Allocation' : 'Supply';
+  const MONTHS = ['2608', '2609', '2610'];
+  const DEV_TH = 10;
+
+  const groupedData = isTVFamily ? [
+    { customer: '小米集团_TV', dim: '55寸', cust: [400, 410, 420], supply: [400, 400, 400],
+      models: [{ name: 'Model A', cust: [180, 185, 190], supply: [180, 180, 180] }] },
+    { customer: '华为集团_TV', dim: '35寸', cust: [150, 130, 128], supply: [150, 150, 150],
+      models: [{ name: 'Model C', cust: [150, 130, 128], supply: [150, 150, 150] }] },
+  ] : isITFamily ? [
+    { customer: '华硕集团_IT', dim: 'IPS', cust: [250, 245, 260], supply: [250, 250, 250],
+      models: [{ name: 'Model P', cust: [125, 122, 130], supply: [125, 125, 125] }] },
+    { customer: '联想集团_IT', dim: 'TN', cust: [140, 118, 115], supply: [140, 140, 140],
+      models: [{ name: 'Model Q', cust: [140, 118, 115], supply: [140, 140, 140] }] },
+  ] : [
+    { customer: '比亚迪集团_MC', dim: 'OLED', cust: [90, 88, 96], supply: [90, 90, 90],
+      models: [{ name: 'Model V', cust: [90, 88, 96], supply: [90, 90, 90] }] },
+    { customer: '蔚来集团_MC', dim: 'LCD', cust: [60, 50, 48], supply: [60, 60, 60],
+      models: [{ name: 'Model W', cust: [60, 50, 48], supply: [60, 60, 60] }] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'dim', label: `${dimLabel} / Model` }, { id: 'dataItem', label: '数据项' }, ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const toggleGroup = (key: string) => { const next = new Set(expandedGroups); next.has(key) ? next.delete(key) : next.add(key); setExpandedGroups(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderDeviation = (key: string, cust: number, supply: number) => {
+    const diff = cust - supply;
+    const pct = supply === 0 ? 0 : Math.round((diff / supply) * 1000) / 10;
+    const over = Math.abs(pct) >= DEV_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{diff > 0 ? `+${diff}` : diff}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Target size={18} className="text-blue-600" />需求供应对比</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[110px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">客户FCST</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`c-${i}`, group.cust[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">{supplyLabel}</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`s-${i}`, group.supply[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">偏差量 / 偏差比例</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderDeviation(`d-${i}`, group.cust[i], group.supply[i]))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && <td rowSpan={3} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle"><div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div></td>}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">客户FCST</td>}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mc-${i}`, model.cust[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">{supplyLabel}</td>}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`ms-${i}`, model.supply[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">偏差量 / 偏差比例</td>}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderDeviation(`md-${i}`, model.cust[i], model.supply[i]))}
+                      </tr>
+                    </React.Fragment>
                   ))}
                 </React.Fragment>
               );
@@ -3611,8 +4356,1407 @@ const SalesTargetComparisonTable = () => {
           </tbody>
         </table>
       </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        偏差比例 ≥ ±{DEV_TH}% 高亮预警
+      </div>
     </div>
   );
+};
+
+// 本版DP VS 上版DP：客户+面板厂+尺寸(TV) / 客户+面板厂+技术别+尺寸(IT/MC)——面板厂+尺寸(技术别)合并展示在第二列
+const DpVsDpTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const dimLabel = isTVFamily ? '面板厂 / 尺寸' : '面板厂 / 技术别+尺寸';
+  const MONTHS = ['2612', '2701', '2702'];
+  const CHANGE_TH = 10;
+
+  const groupedData = isTVFamily ? [
+    { customer: '小米集团_TV', dim: '京东方 / 55寸', weekCur: [420,420,420,420,420,415,400,405,410,410,410,410,410,410,410,410,410,410,410], weekPrev: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400], monthCur: [420, 400, 405], monthPrev: [400, 400, 400],
+      models: [{ name: 'Model A', weekCur: [190,190,190,190,190,188,180,182,185,185,185,185,185,185,185,185,185,185,185], weekPrev: [180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180], monthCur: [190, 180, 182], monthPrev: [180, 180, 180] }] },
+    { customer: '华为集团_TV', dim: 'TCL华星 / 35寸', weekCur: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [130, 132, 130], monthPrev: [150, 150, 150],
+      models: [{ name: 'Model C', weekCur: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [130, 132, 130], monthPrev: [150, 150, 150] }] },
+  ] : [
+    { customer: '华硕集团_IT', dim: '京东方 / IPS 15.6"', weekCur: [270,270,270,270,270,268,260,262,265,265,265,265,265,265,265,265,265,265,265], weekPrev: [250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250], monthCur: [270, 260, 262], monthPrev: [250, 250, 250],
+      models: [{ name: 'Model P', weekCur: [135,135,135,135,135,134,130,131,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125], monthCur: [135, 130, 131], monthPrev: [125, 125, 125] }] },
+    { customer: '联想集团_IT', dim: 'TCL华星 / TN 14"', weekCur: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [118, 120, 118], monthPrev: [140, 140, 140],
+      models: [{ name: 'Model Q', weekCur: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [118, 120, 118], monthPrev: [140, 140, 140] }] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'dim', label: `${dimLabel} / Model` }, { id: 'dataItem', label: '数据项' },
+    ...NEAR_TERM_WEEK_COLUMNS.map(c => ({ id: c.key, label: c.label })), ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const toggleGroup = (key: string) => { const next = new Set(expandedGroups); next.has(key) ? next.delete(key) : next.add(key); setExpandedGroups(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderChange = (key: string, cur: number, prev: number) => {
+    const diff = cur - prev;
+    const pct = prev === 0 ? 0 : Math.round((diff / prev) * 1000) / 10;
+    const over = Math.abs(pct) >= CHANGE_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{diff > 0 ? `+${diff}` : diff}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Layers size={18} className="text-blue-600" />本版DP VS 上版DP</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && (
+                <th key={col.key} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${col.label.startsWith('M') ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600'}`}>
+                  <div>{col.label}</div>
+                  {col.sub && <div className="text-[10px] font-normal opacity-70">{col.sub}</div>}
+                </th>
+              ))}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              const weekCurCols = expandWeeksToColumns(group.weekCur);
+              const weekPrevCols = expandWeeksToColumns(group.weekPrev);
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本版DP</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wv-${i}`, weekCurCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mv-${i}`, group.monthCur[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">上版DP</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wp-${i}`, weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mp-${i}`, group.monthPrev[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">变化量 / 变化率</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`wc-${i}`, weekCurCols[i], weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mc-${i}`, group.monthCur[i], group.monthPrev[i]))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => {
+                    const mWeekCurCols = expandWeeksToColumns(model.weekCur);
+                    const mWeekPrevCols = expandWeeksToColumns(model.weekPrev);
+                    return (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && <td rowSpan={modelRows} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle"><div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div></td>}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">本版DP</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwv-${i}`, mWeekCurCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmv-${i}`, model.monthCur[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">上版DP</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwp-${i}`, mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmp-${i}`, model.monthPrev[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">变化量 / 变化率</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`mwc-${i}`, mWeekCurCols[i], mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mmc-${i}`, model.monthCur[i], model.monthPrev[i]))}
+                      </tr>
+                    </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        变化率 ≥ ±{CHANGE_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 本版DP VS Supply/Allocation：TV=面板厂+尺寸，IT=面板厂+技术别，MC=面板厂+尺寸(仅Supply)
+const DpVsSupplyTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const isITFamily = buType === 'MNT' || buType === 'NB';
+  const dimLabel = isITFamily ? '面板厂 / 技术别' : '面板厂 / 尺寸';
+  const supplyLabel = (isTVFamily || isITFamily) ? '上版Supply/Allocation' : '上版Supply';
+  const MONTHS = ['2612', '2701', '2702'];
+  const CHANGE_TH = 10;
+
+  const groupedData = isTVFamily ? [
+    { customer: '小米集团_TV', dim: '京东方 / 55寸', weekCur: [420,420,420,420,420,415,400,405,410,410,410,410,410,410,410,410,410,410,410], weekPrev: [400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400,400], monthCur: [420, 400, 405], monthPrev: [400, 400, 400],
+      models: [{ name: 'Model A', weekCur: [190,190,190,190,190,188,180,182,185,185,185,185,185,185,185,185,185,185,185], weekPrev: [180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180], monthCur: [190, 180, 182], monthPrev: [180, 180, 180] }] },
+    { customer: '华为集团_TV', dim: 'TCL华星 / 35寸', weekCur: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [130, 132, 130], monthPrev: [150, 150, 150],
+      models: [{ name: 'Model C', weekCur: [130,130,130,130,130,128,132,130,128,128,128,128,128,128,128,128,128,128,128], weekPrev: [150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150], monthCur: [130, 132, 130], monthPrev: [150, 150, 150] }] },
+  ] : isITFamily ? [
+    { customer: '华硕集团_IT', dim: '京东方 / IPS', weekCur: [270,270,270,270,270,268,260,262,265,265,265,265,265,265,265,265,265,265,265], weekPrev: [250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250,250], monthCur: [270, 260, 262], monthPrev: [250, 250, 250],
+      models: [{ name: 'Model P', weekCur: [135,135,135,135,135,134,130,131,132,132,132,132,132,132,132,132,132,132,132], weekPrev: [125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125,125], monthCur: [135, 130, 131], monthPrev: [125, 125, 125] }] },
+    { customer: '联想集团_IT', dim: 'TCL华星 / TN', weekCur: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [118, 120, 118], monthPrev: [140, 140, 140],
+      models: [{ name: 'Model Q', weekCur: [118,118,118,118,118,116,120,118,116,116,116,116,116,116,116,116,116,116,116], weekPrev: [140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140], monthCur: [118, 120, 118], monthPrev: [140, 140, 140] }] },
+  ] : [
+    { customer: '比亚迪集团_MC', dim: '京东方 / OLED', weekCur: [95,95,95,95,95,93,88,90,92,92,92,92,92,92,92,92,92,92,92], weekPrev: [90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90], monthCur: [95, 88, 90], monthPrev: [90, 90, 90],
+      models: [{ name: 'Model V', weekCur: [95,95,95,95,95,93,88,90,92,92,92,92,92,92,92,92,92,92,92], weekPrev: [90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90,90], monthCur: [95, 88, 90], monthPrev: [90, 90, 90] }] },
+    { customer: '蔚来集团_MC', dim: 'TCL华星 / LCD', weekCur: [50,50,50,50,50,48,52,50,48,48,48,48,48,48,48,48,48,48,48], weekPrev: [60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60], monthCur: [50, 52, 50], monthPrev: [60, 60, 60],
+      models: [{ name: 'Model W', weekCur: [50,50,50,50,50,48,52,50,48,48,48,48,48,48,48,48,48,48,48], weekPrev: [60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60], monthCur: [50, 52, 50], monthPrev: [60, 60, 60] }] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'dim', label: `${dimLabel} / Model` }, { id: 'dataItem', label: '数据项' },
+    ...NEAR_TERM_WEEK_COLUMNS.map(c => ({ id: c.key, label: c.label })), ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const toggleGroup = (key: string) => { const next = new Set(expandedGroups); next.has(key) ? next.delete(key) : next.add(key); setExpandedGroups(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderChange = (key: string, cur: number, prev: number) => {
+    const diff = cur - prev;
+    const pct = prev === 0 ? 0 : Math.round((diff / prev) * 1000) / 10;
+    const over = Math.abs(pct) >= CHANGE_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{diff > 0 ? `+${diff}` : diff}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Layers size={18} className="text-blue-600" />本版DP VS Supply/Allocation</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">{dimLabel} / Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && (
+                <th key={col.key} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${col.label.startsWith('M') ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600'}`}>
+                  <div>{col.label}</div>
+                  {col.sub && <div className="text-[10px] font-normal opacity-70">{col.sub}</div>}
+                </th>
+              ))}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              const gKey = `${group.customer}-${group.dim}`;
+              const isExpanded = expandedGroups.has(gKey);
+              const groupRows = 3, modelRows = 3;
+              const weekCurCols = expandWeeksToColumns(group.weekCur);
+              const weekPrevCols = expandWeeksToColumns(group.weekPrev);
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('customer') && <td rowSpan={groupRows + (isExpanded ? group.models.length * modelRows : 0)} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && (
+                      <td rowSpan={groupRows} className="border border-gray-200 p-2 align-middle">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-gray-700">{group.dim}</span>
+                          <button onClick={() => toggleGroup(gKey)} className="p-1 hover:bg-gray-200 rounded transition-colors text-blue-600">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                        </div>
+                      </td>
+                    )}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本版DP</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wv-${i}`, weekCurCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mv-${i}`, group.monthCur[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">{supplyLabel}</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`wp-${i}`, weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mp-${i}`, group.monthPrev[i]))}
+                  </tr>
+                  <tr className={`${isExpanded ? 'bg-blue-50/20' : 'hover:bg-gray-50'} transition-colors`}>
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">变化量 / 变化率</td>}
+                    {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`wc-${i}`, weekCurCols[i], weekPrevCols[i]))}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mc-${i}`, group.monthCur[i], group.monthPrev[i]))}
+                  </tr>
+                  {isExpanded && group.models.map((model, mIdx) => {
+                    const mWeekCurCols = expandWeeksToColumns(model.weekCur);
+                    const mWeekPrevCols = expandWeeksToColumns(model.weekPrev);
+                    return (
+                    <React.Fragment key={mIdx}>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dim') && <td rowSpan={modelRows} className="border border-gray-200 p-2 text-blue-600 font-medium pl-6 align-middle"><div className="flex items-center gap-1"><ChevronRight size={10} className="text-gray-300" />{model.name}</div></td>}
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">本版DP</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwv-${i}`, mWeekCurCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmv-${i}`, model.monthCur[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-400">{supplyLabel}</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderValue(`mwp-${i}`, mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`mmp-${i}`, model.monthPrev[i]))}
+                      </tr>
+                      <tr className="bg-white hover:bg-gray-50 transition-colors">
+                        {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700/70 leading-tight">变化量 / 变化率</td>}
+                        {NEAR_TERM_WEEK_COLUMNS.map((col, i) => visibleColumns.has(col.key) && renderChange(`mwc-${i}`, mWeekCurCols[i], mWeekPrevCols[i]))}
+                        {MONTHS.map((m, i) => visibleColumns.has(m) && renderChange(`mmc-${i}`, model.monthCur[i], model.monthPrev[i]))}
+                      </tr>
+                    </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        变化率 ≥ ±{CHANGE_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 策分偏差分析：仅TV，客户+面板厂+尺寸，季度轴(26Q3/26Q4/27Q1)
+const StrategyDeviationTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const QUARTERS = ['26Q3', '26Q4', '27Q1'];
+  const LOWER_TH = 90;
+  const UPPER_TH = 110;
+  const PANEL_CODE: Record<string, string> = { '京东方': 't1', 'TCL华星': 't2', '惠科': 't3' };
+
+  const groupedData = [
+    { customer: '小米集团_TV', panel: '京东方', size: '55寸', sales: [1150, 1200, 1180], strategy: [1200, 1200, 1200] },
+    { customer: '小米集团_TV', panel: 'TCL华星', size: '65寸', sales: [900, 1000, 950], strategy: [1000, 1000, 1000] },
+    { customer: '华为集团_TV', panel: '京东方', size: '35寸', sales: [780, 700, 720], strategy: [700, 700, 700] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'panel', label: '面板厂' }, { id: 'size', label: '尺寸' }, { id: 'dataItem', label: '数据项' },
+    ...QUARTERS.map(q => ({ id: q, label: q }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderRate = (key: string, sales: number, strategy: number) => {
+    const rate = strategy === 0 ? 100 : Math.round((sales / strategy) * 100);
+    const gap = sales - strategy;
+    const over = rate <= LOWER_TH || rate >= UPPER_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{rate}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Target size={18} className="text-blue-600" />策分偏差分析</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('panel') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[70px]">面板厂</th>}
+              {visibleColumns.has('size') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[70px]">尺寸</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {QUARTERS.map(q => visibleColumns.has(q) && <th key={q} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-blue-50 text-blue-700">{q}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('customer') && <td rowSpan={3} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                  {visibleColumns.has('panel') && <td rowSpan={3} className="border border-gray-200 p-2 text-center align-middle font-bold text-gray-700">{PANEL_CODE[group.panel] ?? group.panel}</td>}
+                  {visibleColumns.has('size') && <td rowSpan={3} className="border border-gray-200 p-2 text-center align-middle font-bold text-gray-700">{group.size}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">销售FCST总量</td>}
+                  {QUARTERS.map((q, i) => visibleColumns.has(q) && renderValue(`s-${i}`, group.sales[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">策分量</td>}
+                  {QUARTERS.map((q, i) => visibleColumns.has(q) && renderValue(`t-${i}`, group.strategy[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">偏差量 / 策分执行率</td>}
+                  {QUARTERS.map((q, i) => visibleColumns.has(q) && renderRate(`r-${i}`, group.sales[i], group.strategy[i]))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        策分执行率 ≤{LOWER_TH}%（达成不足）或 ≥{UPPER_TH}%（超卖风险）高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 重点产品达成分析：客户+产品类别，当年(2026)月度+半年小计+全年小计
+const KeyProductAchievementTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const [monthsCollapsed, setMonthsCollapsed] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const isITFamily = buType === 'MNT' || buType === 'NB';
+  const MONTHS = ['2601', '2602', '2603', '2604', '2605', '2606', '2607', '2608', '2609', '2610', '2611', '2612'];
+  const RATE_TH = 90;
+
+  const periodHeaders: { label: string; isMonth: boolean; monthIndexes: number[] }[] = [];
+  MONTHS.forEach((m, i) => {
+    periodHeaders.push({ label: m, isMonth: true, monthIndexes: [i] });
+    if (i === 5) periodHeaders.push({ label: 'H1小计', isMonth: false, monthIndexes: [0, 1, 2, 3, 4, 5] });
+    if (i === 11) {
+      periodHeaders.push({ label: 'H2小计', isMonth: false, monthIndexes: [6, 7, 8, 9, 10, 11] });
+      periodHeaders.push({ label: '全年小计', isMonth: false, monthIndexes: MONTHS.map((_, idx) => idx) });
+    }
+  });
+  const sumByIndexes = (arr: number[], indexes: number[]) => indexes.reduce((s, i) => s + arr[i], 0);
+
+  // TV/CID：98寸重点产品，达成率有4种算法口径（出货/营收 × FCST/DP），KPI为统一分母
+  const tvGroupedData = [
+    { customer: '小米集团_TV', category: '98"',
+      kpi: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100],
+      shipFcst: [95, 96, 94, 98, 97, 99, 100, 101, 102, 100, 98, 97],
+      shipDp: [92, 90, 88, 93, 95, 94, 96, 97, 95, 94, 92, 90],
+      revFcst: [98, 97, 96, 99, 100, 101, 102, 103, 104, 102, 100, 99],
+      revDp: [85, 83, 80, 86, 88, 87, 89, 90, 88, 86, 84, 82] },
+    { customer: '华为集团_TV', category: '98"',
+      kpi: [90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90],
+      shipFcst: [88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77],
+      shipDp: [85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74],
+      revFcst: [92, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80],
+      revDp: [80, 78, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67] },
+  ];
+
+  // 2608之后为未来月份，实际口径为"YTD达成+未来预测"合并后的单行月度值
+  const groupedData = isITFamily
+    ? [
+        { customer: '华硕集团_IT', category: 'KPI重点产品A', actual: [80, 82, 78, 85, 88, 90, 92, 95, 96, 94, 90, 88], annualTarget: 1100 },
+        { customer: '联想集团_IT', category: 'KPI重点产品B', actual: [60, 58, 62, 65, 63, 60, 58, 55, 54, 52, 50, 48], annualTarget: 850 },
+      ]
+    : [
+        { customer: '比亚迪集团_MC', category: 'KPI重点产品A', actual: [80, 82, 78, 85, 88, 90, 92, 95, 96, 94, 90, 88], annualTarget: 1100 },
+        { customer: '蔚来集团_MC', category: 'KPI重点产品B', actual: [60, 58, 62, 65, 63, 60, 58, 55, 54, 52, 50, 48], annualTarget: 850 },
+      ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'category', label: '产品类别' }, { id: 'dataItem', label: '数据项' },
+    ...periodHeaders.map(h => ({ id: h.label, label: h.label }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const visiblePeriodIndexes = periodHeaders.map((h, i) => ({ h, i })).filter(({ h }) => (!monthsCollapsed || !h.isMonth) && visibleColumns.has(h.label));
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderRate = (key: string, actualSum: number, targetSum: number) => {
+    const rate = targetSum === 0 ? 100 : Math.round((actualSum / targetSum) * 100);
+    const gap = actualSum - targetSum;
+    const over = rate <= RATE_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{rate}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Crown size={18} className="text-blue-600" />重点产品达成分析</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+          <button onClick={() => setMonthsCollapsed(!monthsCollapsed)} className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold border border-blue-100 hover:bg-blue-100 transition-all flex items-center gap-1">
+            {monthsCollapsed ? <Eye size={14} /> : <EyeOff size={14} />}
+            {monthsCollapsed ? '展开月度' : '仅看半年/全年'}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('category') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[120px]">产品类别</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">数据项</th>}
+              {visiblePeriodIndexes.map(({ h, i }) => (
+                <th key={i} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${h.isMonth ? 'bg-white text-gray-600' : 'bg-blue-50 text-blue-700'}`}>{h.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {isTVFamily ? tvGroupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('customer') && <td rowSpan={9} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                  {visibleColumns.has('category') && <td rowSpan={9} className="border border-gray-200 p-2 align-middle font-bold text-gray-700">{group.category}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">KPI</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`kpi-${i}`, sumByIndexes(group.kpi, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">出货+FCST</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`sf-${i}`, sumByIndexes(group.shipFcst, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">出货+DP</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`sd-${i}`, sumByIndexes(group.shipDp, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">营收+FCST</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`rf-${i}`, sumByIndexes(group.revFcst, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">营收+DP</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`rd-${i}`, sumByIndexes(group.revDp, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(出货+FCST)</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsf-${i}`, sumByIndexes(group.shipFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(出货+DP)</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsd-${i}`, sumByIndexes(group.shipDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(营收+FCST)</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrf-${i}`, sumByIndexes(group.revFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(营收+DP)</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrd-${i}`, sumByIndexes(group.revDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                </tr>
+              </React.Fragment>
+            )) : groupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('customer') && <td rowSpan={3} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                  {visibleColumns.has('category') && <td rowSpan={3} className="border border-gray-200 p-2 align-middle font-bold text-gray-700">{group.category}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600 leading-tight">YTD达成 + 未来预测</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`a-${i}`, sumByIndexes(group.actual, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">年度目标（按比例折算）</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`t-${i}`, Math.round(group.annualTarget * h.monthIndexes.length / 12)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">缺口 / 达成率</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`r-${i}`, sumByIndexes(group.actual, h.monthIndexes), Math.round(group.annualTarget * h.monthIndexes.length / 12)))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        达成率 ≤{RATE_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 本版DP VS 供应BP/RP：面板厂大板总量，M+6月度(2608-2702)，无季度
+const DpVsBprpTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const MONTHS = ['2608', '2609', '2610', '2611', '2612', '2701', '2702'];
+  const DEV_TH = 5;
+
+  const groupedData = [
+    { panel: '京东方', demand: [4200, 4300, 4250, 4100, 4150, 4200, 4180], bprp: [4300, 4300, 4300, 4300, 4300, 4300, 4300] },
+    { panel: 'TCL华星', demand: [3600, 3550, 3700, 3650, 3600, 3600, 3620], bprp: [3600, 3600, 3600, 3600, 3600, 3600, 3600] },
+    { panel: '惠科', demand: [1800, 1750, 1900, 1850, 1800, 1780, 1800], bprp: [1800, 1800, 1800, 1800, 1800, 1800, 1800] },
+  ];
+
+  const allColumns = [{ id: 'panel', label: '面板厂' }, { id: 'dataItem', label: '数据项' }, ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderDeviation = (key: string, demand: number, bprp: number) => {
+    const gap = demand - bprp;
+    const pct = bprp === 0 ? 0 : Math.round((gap / bprp) * 1000) / 10;
+    const over = Math.abs(pct) >= DEV_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Layers size={18} className="text-blue-600" />本版DP VS 供应BP/RP</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('panel') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[100px]">面板厂</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('panel') && <td rowSpan={3} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.panel}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">大板需求总量</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`d-${i}`, group.demand[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">供应计划BP/RP</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`b-${i}`, group.bprp[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">大板GAP / 偏差率</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderDeviation(`g-${i}`, group.demand[i], group.bprp[i]))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        偏差率 ≥ ±{DEV_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 市场份额分析：客户+技术别，M+3月度(2608-2610)
+const MarketShareTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const MONTHS = ['2608', '2609', '2610'];
+  const RATE_TH = 80;
+  const techLabel = buType === 'MC' ? '技术别（OLED/LCD）' : '技术别';
+
+  const groupedData = [
+    { customer: '苹果集团_MC', tech: 'OLED手机', target: [18, 18, 18], actual: [16.5, 15.8, 14.2] },
+    { customer: '三星集团_MC', tech: 'LCD平板', target: [12, 12, 12], actual: [11.8, 11.5, 11.9] },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'tech', label: techLabel }, { id: 'dataItem', label: '数据项' }, ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderPct = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}%</td>
+  );
+  const renderRate = (key: string, actual: number, target: number) => {
+    const rate = target === 0 ? 100 : Math.round((actual / target) * 100);
+    const gap = Math.round((actual - target) * 10) / 10;
+    const over = rate <= RATE_TH;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{rate}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}pt</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Activity size={18} className="text-blue-600" />市场份额分析</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('tech') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">{techLabel}</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('customer') && <td rowSpan={3} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                  {visibleColumns.has('tech') && <td rowSpan={3} className="border border-gray-200 p-2 align-middle font-bold text-gray-700">{group.tech}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">市场份额目标</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderPct(`t-${i}`, group.target[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">推算本版市场份额</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderPct(`a-${i}`, group.actual[i]))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率</td>}
+                  {MONTHS.map((m, i) => visibleColumns.has(m) && renderRate(`r-${i}`, group.actual[i], group.target[i]))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        达成率 ≤{RATE_TH}% 高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 出货形态分析：仅MNT/NB/车载，出货形态(OC/LCM/TPM)单维度，当年月度+半年+全年
+const ShipmentFormTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const [monthsCollapsed, setMonthsCollapsed] = useState(false);
+  const MONTHS = ['2601', '2602', '2603', '2604', '2605', '2606', '2607', '2608', '2609', '2610', '2611', '2612'];
+
+  const periodHeaders: { label: string; isMonth: boolean; monthIndexes: number[] }[] = [];
+  MONTHS.forEach((m, i) => {
+    periodHeaders.push({ label: m, isMonth: true, monthIndexes: [i] });
+    if (i === 5) periodHeaders.push({ label: 'H1小计', isMonth: false, monthIndexes: [0, 1, 2, 3, 4, 5] });
+    if (i === 11) {
+      periodHeaders.push({ label: 'H2小计', isMonth: false, monthIndexes: [6, 7, 8, 9, 10, 11] });
+      periodHeaders.push({ label: '全年小计', isMonth: false, monthIndexes: MONTHS.map((_, idx) => idx) });
+    }
+  });
+  const sumByIndexes = (arr: number[], indexes: number[]) => indexes.reduce((s, i) => s + arr[i], 0);
+
+  const forms = [
+    { form: 'OC', shipment: [180, 175, 190, 185, 180, 178, 182, 188, 190, 186, 182, 180], targetPct: 40 },
+    { form: 'LCM', shipment: [160, 158, 150, 155, 160, 162, 158, 150, 148, 152, 155, 158], targetPct: 35 },
+    { form: 'TPM', shipment: [100, 98, 105, 102, 100, 95, 90, 88, 85, 84, 82, 80], targetPct: 25 },
+  ];
+  const bprpTotal = [440, 431, 445, 442, 440, 435, 430, 426, 423, 422, 419, 418]; // BP/RP总出货量（占比计算分母）
+
+  const allColumns = [{ id: 'form', label: '出货形态' }, { id: 'dataItem', label: '数据项' }, ...periodHeaders.map(h => ({ id: h.label, label: h.label }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+  const visiblePeriodIndexes = periodHeaders.map((h, i) => ({ h, i })).filter(({ h }) => (!monthsCollapsed || !h.isMonth) && visibleColumns.has(h.label));
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const renderPctCell = (key: string, shipSum: number, totalSum: number, targetPct: number) => {
+    const pct = totalSum === 0 ? 0 : Math.round((shipSum / totalSum) * 1000) / 10;
+    const over = pct < targetPct;
+    return (
+      <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
+        <div className="flex flex-col items-center justify-center">
+          <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{pct}%</span>
+          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>目标&gt;{targetPct}%</span>
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Tag size={18} className="text-blue-600" />出货形态分析</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+          <button onClick={() => setMonthsCollapsed(!monthsCollapsed)} className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold border border-blue-100 hover:bg-blue-100 transition-all flex items-center gap-1">
+            {monthsCollapsed ? <Eye size={14} /> : <EyeOff size={14} />}
+            {monthsCollapsed ? '展开月度' : '仅看半年/全年'}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('form') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">出货形态</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {visiblePeriodIndexes.map(({ h, i }) => (
+                <th key={i} className={`border border-gray-200 p-1 font-bold min-w-[70px] ${h.isMonth ? 'bg-white text-gray-600' : 'bg-blue-50 text-blue-700'}`}>{h.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {forms.map((f, gIdx) => (
+              <React.Fragment key={gIdx}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('form') && <td rowSpan={2} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{f.form}</td>}
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">出货量（YTD+预测）</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderValue(`s-${i}`, sumByIndexes(f.shipment, h.monthIndexes)))}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">占比 vs BP/RP总量</td>}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderPctCell(`p-${i}`, sumByIndexes(f.shipment, h.monthIndexes), sumByIndexes(bprpTotal, h.monthIndexes), f.targetPct))}
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        各形态占比低于目标占比（OC&gt;40% / LCM&gt;35% / TPM&gt;25%）高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 物料授权情况检查：仅MC/车载，客户+Model，M+6月度(2608-2702)，逐月累加FCST，超授权后持续标红
+const MaterialAuthTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const MONTHS = ['2608', '2609', '2610', '2611', '2612', '2701', '2702'];
+
+  const groupedData = [
+    { customer: '比亚迪集团_MC', model: 'Model V1.1', fcst: [200, 210, 220, 230, 240, 250, 260], authorized: 1200 },
+    { customer: '蔚来集团_MC', model: 'Model W1.1', fcst: [80, 85, 90, 95, 100, 105, 110], authorized: 700 },
+  ];
+
+  const allColumns = [{ id: 'customer', label: '集团客户名称' }, { id: 'model', label: 'Model' }, { id: 'dataItem', label: '数据项' }, ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderValue = (key: string, val: number, danger = false) => (
+    <td key={key} className={`border border-gray-200 p-2 text-center font-medium ${danger ? 'bg-red-50 text-red-600 font-bold' : 'text-gray-900'}`}>{val}</td>
+  );
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><AlertCircle size={18} className="text-blue-600" />物料授权情况检查</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">集团客户名称</th>}
+              {visibleColumns.has('model') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[110px]">Model</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[80px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group, gIdx) => {
+              let cumulative = 0;
+              const cumArr: number[] = [];
+              const remainingArr: number[] = [];
+              let triggered = false;
+              const triggeredArr: boolean[] = [];
+              group.fcst.forEach(v => {
+                cumulative += v;
+                cumArr.push(cumulative);
+                remainingArr.push(group.authorized - cumulative);
+                if (cumulative > group.authorized) triggered = true;
+                triggeredArr.push(triggered);
+              });
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('customer') && <td rowSpan={4} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('model') && <td rowSpan={4} className="border border-gray-200 p-2 align-middle font-bold text-gray-700">{group.model}</td>}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">月度客户FCST</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`f-${i}`, group.fcst[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">累计FCST（逐月累加）</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`c-${i}`, cumArr[i], triggeredArr[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">授权剩余量</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`r-${i}`, remainingArr[i], triggeredArr[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">缺口（授权量：{group.authorized}）</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`g-${i}`, Math.min(remainingArr[i], 0), triggeredArr[i]))}
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        累计FCST超过剩余可用授权量时，从该月起触发预警并标红（不可回退）
+      </div>
+    </div>
+  );
+};
+
+// 历史同期趋势偏差：TV可切换客户/尺寸/技术别单维度；IT/MC固定客户+面板厂+技术别，近8个月(2601-2608)
+const HistoryTrendTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const isTVFamily = buType === 'TV' || buType === 'CID';
+  const [dimMode, setDimMode] = useState<'customer' | 'size' | 'tech'>('customer');
+  const MONTHS = ['2601', '2602', '2603', '2604', '2605', '2606', '2607', '2608'];
+  const YOY_TH = 30;
+
+  const tvDataByMode: Record<'customer' | 'size' | 'tech', { label: string; cur: number[]; y1: number[]; y2: number[] }[]> = {
+    customer: [
+      { label: '小米集团_TV', cur: [420, 415, 430, 440, 450, 460, 470, 480], y1: [420, 415, 430, 440, 340, 460, 470, 480], y2: [420, 415, 430, 440, 320, 460, 470, 480] },
+      { label: '华为集团_TV', cur: [150, 148, 145, 140, 135, 130, 125, 120], y1: [150, 148, 145, 140, 135, 130, 125, 175], y2: [150, 148, 145, 140, 135, 130, 125, 180] },
+    ],
+    size: [
+      { label: '55寸', cur: [420, 415, 430, 440, 450, 460, 470, 480], y1: [420, 415, 430, 440, 340, 460, 470, 480], y2: [420, 415, 430, 440, 320, 460, 470, 480] },
+      { label: '65寸', cur: [150, 148, 145, 140, 135, 130, 125, 120], y1: [150, 148, 145, 140, 135, 130, 125, 175], y2: [150, 148, 145, 140, 135, 130, 125, 180] },
+    ],
+    tech: [
+      { label: 'OLED', cur: [420, 415, 430, 440, 450, 460, 470, 480], y1: [420, 415, 430, 440, 340, 460, 470, 480], y2: [420, 415, 430, 440, 320, 460, 470, 480] },
+      { label: 'LCD', cur: [150, 148, 145, 140, 135, 130, 125, 120], y1: [150, 148, 145, 140, 135, 130, 125, 175], y2: [150, 148, 145, 140, 135, 130, 125, 180] },
+    ],
+  };
+  const dimLabels: Record<'customer' | 'size' | 'tech', string> = { customer: '集团客户名称', size: '尺寸', tech: '技术别' };
+
+  const itMcData = [
+    { customer: '华硕集团_IT', dim: '京东方 / IPS', cur: [270, 268, 265, 260, 255, 250, 245, 180], y1: [270, 268, 265, 260, 255, 250, 245, 270], y2: [270, 268, 265, 260, 255, 250, 245, 280] },
+    { customer: '联想集团_IT', dim: 'TCL华星 / TN', cur: [118, 116, 120, 118, 116, 155, 150, 148], y1: [118, 116, 120, 118, 116, 110, 150, 148], y2: [118, 116, 120, 118, 116, 108, 150, 148] },
+  ];
+
+  const groupedData = isTVFamily
+    ? tvDataByMode[dimMode].map(g => ({ key: g.label, dim: g.label, cur: g.cur, y1: g.y1, y2: g.y2 }))
+    : itMcData.map(g => ({ key: g.customer, customer: g.customer, dim: g.dim, cur: g.cur, y1: g.y1, y2: g.y2 }));
+
+  const allColumns = [
+    ...(isTVFamily ? [] : [{ id: 'customer', label: '集团客户名称' }]),
+    { id: 'dim', label: isTVFamily ? dimLabels[dimMode] : '面板厂 / 技术别' },
+    { id: 'dataItem', label: '数据项' },
+    ...MONTHS.map(m => ({ id: m, label: m })),
+  ];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderValue = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
+  );
+  const computePct = (cur: number, base: number) => base === 0 ? 0 : Math.round((cur - base) / base * 1000) / 10;
+  const renderYoy = (key: string, pct: number, highlight: boolean) => (
+    <td key={key} className={`border border-gray-200 p-2 text-center ${highlight ? 'bg-red-50' : ''}`}>
+      <span className={`font-bold ${highlight ? 'text-red-600' : 'text-gray-900'}`}>{pct > 0 ? `+${pct}` : pct}%</span>
+    </td>
+  );
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Clock size={18} className="text-blue-600" />历史同期趋势偏差</h3>
+        <div className="flex items-center gap-2">
+          {isTVFamily && (
+            <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+              {(['customer', 'size', 'tech'] as const).map(m => (
+                <button key={m} onClick={() => setDimMode(m)} className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${dimMode === m ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{dimLabels[m]}</button>
+              ))}
+            </div>
+          )}
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {!isTVFamily && visibleColumns.has('customer') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[90px]">集团客户名称</th>}
+              {visibleColumns.has('dim') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[130px]">{isTVFamily ? dimLabels[dimMode] : '面板厂 / 技术别'}</th>}
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[140px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[75px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedData.map((group: any, gIdx) => {
+              const yoy1 = MONTHS.map((_, i) => computePct(group.cur[i], group.y1[i]));
+              const yoy2 = MONTHS.map((_, i) => computePct(group.cur[i], group.y2[i]));
+              const hi = MONTHS.map((_, i) => {
+                const over1 = Math.abs(yoy1[i]) >= YOY_TH;
+                const over2 = Math.abs(yoy2[i]) >= YOY_TH;
+                const sameSign = (yoy1[i] >= 0 && yoy2[i] >= 0) || (yoy1[i] <= 0 && yoy2[i] <= 0);
+                return over1 && over2 && sameSign;
+              });
+              return (
+                <React.Fragment key={gIdx}>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {!isTVFamily && visibleColumns.has('customer') && <td rowSpan={5} className="border border-gray-200 p-2 text-center font-bold text-gray-800 align-middle">{group.customer}</td>}
+                    {visibleColumns.has('dim') && <td rowSpan={5} className="border border-gray-200 p-2 align-middle font-bold text-gray-700">{group.dim}</td>}
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本年FCST</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`c-${i}`, group.cur[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-1同期实际</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`y1-${i}`, group.y1[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-2同期实际</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderValue(`y2-${i}`, group.y2[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">与Y-1同比幅度</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderYoy(`d1-${i}`, yoy1[i], hi[i]))}
+                  </tr>
+                  <tr className="hover:bg-gray-50 transition-colors">
+                    {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">与Y-2同比幅度</td>}
+                    {MONTHS.map((m, i) => visibleColumns.has(m) && renderYoy(`d2-${i}`, yoy2[i], hi[i]))}
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        与Y-1、Y-2同比幅度方向一致且绝对值均≥{YOY_TH}%时高亮预警
+      </div>
+    </div>
+  );
+};
+
+// 平均尺寸变化：仅TV，无分组维度（大盘统计），近8个月(2601-2608)
+const AvgSizeChangeTable = ({ buType }: { buType: AnomalyBU }) => {
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState(false);
+  const MONTHS = ['2601', '2602', '2603', '2604', '2605', '2606', '2607', '2608'];
+
+  const avgSize = [64.2, 64.0, 63.8, 63.5, 63.0, 62.5, 62.0, 61.5];
+  const avgY1 = [63.0, 63.2, 63.4, 63.5, 63.6, 63.8, 64.0, 64.2];
+  const avgY2 = [61.0, 61.2, 61.4, 61.6, 61.8, 62.0, 62.2, 62.4];
+  const pct43 = [18, 19, 20, 22, 29, 32, 35, 38];
+  const pctY1 = [20, 20, 21, 22, 23, 24, 25, 26];
+  const pctY2 = [16, 16, 17, 17, 18, 18, 19, 19];
+
+  const dev1 = MONTHS.map((_, i) => Math.round((avgSize[i] - avgY1[i]) * 10) / 10);
+  const dev2 = MONTHS.map((_, i) => Math.round((avgSize[i] - avgY2[i]) * 10) / 10);
+  const conds = MONTHS.map((_, i) => ({
+    a: dev1[i] < 0 && pct43[i] > pctY1[i],
+    b: pct43[i] > 30,
+    c: dev1[i] <= 0 && dev2[i] <= 0,
+  }));
+
+  const allColumns = [{ id: 'dataItem', label: '数据项' }, ...MONTHS.map(m => ({ id: m, label: m }))];
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(allColumns.map(c => c.id)));
+  const toggleColumn = (id: string) => { const next = new Set(visibleColumns); if (next.has(id)) { if (next.size > 1) next.delete(id); } else { next.add(id); } setVisibleColumns(next); };
+
+  const renderInch = (key: string, val: number) => (
+    <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}"</td>
+  );
+  const renderPct = (key: string, val: number, hi: boolean) => (
+    <td key={key} className={`border border-gray-200 p-2 text-center ${hi ? 'bg-red-50' : ''}`}>
+      <span className={`font-bold ${hi ? 'text-red-600' : 'text-gray-900'}`}>{val}%</span>
+    </td>
+  );
+  const renderDev = (key: string, val: number, tags: string[]) => (
+    <td key={key} className={`border border-gray-200 p-2 text-center ${tags.length ? 'bg-red-50' : ''}`}>
+      <div className="flex flex-col items-center justify-center">
+        <span className={`font-bold ${tags.length ? 'text-red-600' : 'text-gray-900'}`}>{val > 0 ? `+${val}` : val}"</span>
+        {tags.length > 0 && <span className="text-[10px] font-bold text-red-500">{tags.join('')}</span>}
+      </div>
+    </td>
+  );
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><RefreshCcw size={18} className="text-blue-600" />平均尺寸变化</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button onClick={() => setIsColumnSettingsOpen(!isColumnSettingsOpen)} className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="表格设置"><Settings size={16} /></button>
+            <AnimatePresence>
+              {isColumnSettingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsColumnSettingsOpen(false)}></div>
+                  <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-full right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-[100] p-2">
+                    <p className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">选择显示字段</p>
+                    <div className="max-h-60 overflow-y-auto relative z-50">
+                      {allColumns.map(col => (
+                        <label key={col.id} className="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors group">
+                          <input type="checkbox" checked={visibleColumns.has(col.id)} onChange={() => toggleColumn(col.id)} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+                          <span className={`text-[11px] font-medium transition-colors ${visibleColumns.has(col.id) ? 'text-blue-600' : 'text-gray-600 group-hover:text-gray-900'}`}>{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+          <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              {visibleColumns.has('dataItem') && <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[150px]">数据项</th>}
+              {MONTHS.map(m => visibleColumns.has(m) && <th key={m} className="border border-gray-200 p-1 font-bold min-w-[75px] bg-white text-gray-600">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">本版平均尺寸</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderInch(`s-${i}`, avgSize[i]))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-1同期平均尺寸</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderInch(`y1-${i}`, avgY1[i]))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-2同期平均尺寸</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderInch(`y2-${i}`, avgY2[i]))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">与Y-1偏差</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderDev(`d1-${i}`, dev1[i], [conds[i].a ? '①' : '', conds[i].c ? '③' : ''].filter(Boolean)))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700">与Y-2偏差</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderDev(`d2-${i}`, dev2[i], [conds[i].c ? '③' : ''].filter(Boolean)))}
+            </tr>
+            <tr className="border-t-2 border-gray-200">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600 bg-gray-50/50">本版43寸以下占比</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderPct(`p-${i}`, pct43[i], conds[i].a || conds[i].b))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-1同期占比</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderPct(`py1-${i}`, pctY1[i], false))}
+            </tr>
+            <tr className="hover:bg-gray-50 transition-colors">
+              {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 text-gray-600">Y-2同期占比</td>}
+              {MONTHS.map((m, i) => visibleColumns.has(m) && renderPct(`py2-${i}`, pctY2[i], false))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex flex-col gap-1 text-[11px] text-gray-500">
+        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>满足以下任一条件即高亮预警：</div>
+        <div className="pl-5">① Y-1偏差&lt;0 且当期43寸以下占比&gt;Y-1同期占比　　② 43寸以下占比&gt;30%　　③ Y-1、Y-2偏差均≤0</div>
+      </div>
+    </div>
+  );
+};
+
+// 产品生命周期状态验证：Model级清单，非阈值网格，示例演示三类固定触发规则
+const LifecycleExceptionTable = ({ buType }: { buType: AnomalyBU }) => {
+  const stageBadge: Record<string, string> = {
+    'GA前': 'bg-blue-50 text-blue-700 border-blue-200',
+    'GA后': 'bg-green-50 text-green-700 border-green-200',
+    'EOL': 'bg-gray-100 text-gray-600 border-gray-300',
+  };
+  const MONTHS = ['2608', '2609', '2610', '2611', '2612', '2701', '2702'];
+  const rows = [
+    { model: 'Model X', extVersion: 'V2.0', stage: 'EOL', rule: 'EOP后仍有客户FCST',
+      ruleText: 'EOP后仍有客户FCST提报，自动触发高呆滞风险预警，提示销售核查是否错报',
+      fcst: [0, 0, 120, 80, 60, 40, 20], hitIndexes: [2, 3, 4, 5, 6] },
+    { model: 'Model Z', extVersion: 'V3.1', stage: 'GA后', rule: '量产产品M+6内无任何需求',
+      ruleText: '量产产品M+6内无任何需求，自动触发产品EOL风险预警',
+      fcst: [0, 0, 0, 0, 0, 0, 0], hitIndexes: [0, 1, 2, 3, 4, 5, 6] },
+    { model: 'Model Y', extVersion: 'V1.0', stage: 'GA前', rule: 'GA前有客户FCST提报',
+      ruleText: 'GA前有客户FCST提报，自动触发提前需求异常预警，提示销售核查是否提前导入',
+      fcst: [50, 30, 0, 0, 0, 0, 0], hitIndexes: [0, 1] },
+  ];
+
+  return (
+    <div className="w-full overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="p-4 border-b border-gray-100 bg-white flex items-center justify-between">
+        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2"><Filter size={18} className="text-blue-600" />产品生命周期状态验证</h3>
+        <button className="w-8 h-8 bg-white border border-gray-200 text-gray-600 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm active:scale-90" title="导出当前数据"><Download size={16} /></button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="bg-gray-50 sticky top-0 z-20">
+            <tr>
+              <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[100px]">Model</th>
+              <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[80px]">对外版次</th>
+              <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[100px]">生命周期阶段</th>
+              <th className="border border-gray-200 p-2 bg-gray-50 font-bold text-gray-700 min-w-[160px]">触发规则</th>
+              {MONTHS.map(m => <th key={m} className="border border-gray-200 p-1 font-bold min-w-[60px] bg-blue-50 text-blue-700">{m}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="hover:bg-gray-50 transition-colors">
+                <td className="border border-gray-200 p-2 font-bold text-gray-800">{r.model}</td>
+                <td className="border border-gray-200 p-2 text-center text-gray-600">{r.extVersion}</td>
+                <td className="border border-gray-200 p-2 text-center">
+                  <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-bold ${stageBadge[r.stage]}`}>{r.stage}</span>
+                </td>
+                <td className="border border-gray-200 p-2">
+                  <div className="font-bold text-red-600">{r.rule}</div>
+                  <div className="text-[10px] text-gray-400 mt-0.5">{r.ruleText}</div>
+                </td>
+                {r.fcst.map((v, mi) => {
+                  const hit = r.hitIndexes.includes(mi);
+                  return (
+                    <td key={mi} className={`border border-gray-200 p-2 text-center font-medium ${hit ? 'bg-red-50 text-red-600 font-bold' : 'text-gray-900'}`}>{v}</td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="w-3 h-3 rounded bg-red-50 border border-red-200 inline-block"></span>
+        证据数据为该Model的M+6月度客户FCST；红色高亮为触发规则的月份（呆滞：EOP后仍非零的月份；GA后EOL：M+6内全部为0；GA前：GA前仍有FCST的月份）
+      </div>
+    </div>
+  );
+};
+
+const RULE_DETAIL_COMPONENTS: Record<string, React.ComponentType<{ buType: AnomalyBU }>> = {
+  'fcst-change': CustomerFcstChangeTable,
+  'sales-fcst-change': SalesFcstChangeTable,
+  'sales-vs-customer': SalesVsCustomerFcstTable,
+  'supply-demand': SupplyDemandCompareTable,
+  'dp-vs-dp': DpVsDpTable,
+  'dp-vs-supply': DpVsSupplyTable,
+  'strategy': StrategyDeviationTable,
+  'key-product': KeyProductAchievementTable,
+  'dp-vs-bprp': DpVsBprpTable,
+  'market-share': MarketShareTable,
+  'shipment-form': ShipmentFormTable,
+  'material-auth': MaterialAuthTable,
+  'history-trend': HistoryTrendTable,
+  'avg-size': AvgSizeChangeTable,
+  'lifecycle': LifecycleExceptionTable,
 };
 
 const ValidationResults = ({ rules, onAction }: { rules: ValidationRule[], onAction: (text: string) => void }) => {
@@ -3620,7 +5764,7 @@ const ValidationResults = ({ rules, onAction }: { rules: ValidationRule[], onAct
     if (rule.name === '销售目标达成对比') {
       onAction('查看销售目标达成对比');
     } else {
-      onAction(`查看${rule.name}详情`);
+      onAction(`查看规则详情:${rule.id}`);
     }
   };
 
@@ -6733,7 +8877,7 @@ const CustomerFCSTRawTable = () => {
 
       {/* Header */}
       <div className="px-5 py-3 border-b border-gray-200">
-        <h2 className="text-base font-bold text-gray-800">客户FCST管理</h2>
+        <h2 className="text-base font-bold text-gray-800">查看客户FCST管理</h2>
       </div>
 
       {/* Filter Area */}
@@ -6913,6 +9057,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [userRole, setUserRole] = useState<'sales' | 'director' | 'sales-admin' | 'sales-admin-head'>('sales');
   const [buType, setBuType] = useState<'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC'>('TV');
+  const [validationScene, setValidationScene] = useState<AnomalyScene>('销售FCST分析');
   const [forecastData, setForecastData] = useState<ForecastRow[]>([]);
   const [backupForecastData, setBackupForecastData] = useState<ForecastRow[] | null>(null);
   const [anomalyRuleRows, setAnomalyRuleRows] = useState<AnomalyRuleRow[]>([]);
@@ -6968,7 +9113,29 @@ export default function App() {
     // Simulate agent processing
     setTimeout(() => {
       setIsTyping(false);
-      if (text === 'CRM配置') {
+      if (text.startsWith('查看规则详情:')) {
+        const ruleId = text.slice('查看规则详情:'.length);
+        const ruleDef = ANOMALY_RULE_DEFINITIONS.find(r => r.id === ruleId);
+        if (ruleDef && RULE_DETAIL_COMPONENTS[ruleId]) {
+          const agentMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'agent',
+            content: `${ruleDef.name}校验详情如下：`,
+            type: 'rule-detail-table',
+            data: ruleId,
+            buType: buType
+          };
+          setMessages(prev => [...prev, agentMsg]);
+        } else {
+          const agentMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'agent',
+            content: '暂无详细校验数据',
+            type: 'text'
+          };
+          setMessages(prev => [...prev, agentMsg]);
+        }
+      } else if (text === 'CRM配置') {
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
@@ -6988,7 +9155,15 @@ export default function App() {
           ]
         };
         setMessages(prev => [...prev, agentMsg]);
-      } else if (text === '查看客户原始fcst' || text === '查看客户原始FCST') {
+      } else if (text === '查看模拟经营结果') {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '请选择要对比的版本：',
+          type: 'version-select'
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      } else if (text === '查看客户FCST管理' || text === '查看客户原始fcst' || text === '查看客户原始FCST') {
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
@@ -7057,7 +9232,7 @@ export default function App() {
           buType: buType
         };
         setMessages(prev => [...prev, agentMsg]);
-      } else if (text === '确认查看本周DP') {
+      } else if (text.includes('查看本周DP')) {
         const initialData = generateInitialData(buType);
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
@@ -7066,14 +9241,6 @@ export default function App() {
           type: 'dp-table-readonly',
           data: initialData,
           buType: buType
-        };
-        setMessages(prev => [...prev, agentMsg]);
-      } else if (text.includes('查看本周DP')) {
-        const agentMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'agent',
-          content: '您好，销管主管。请先选择您想查看的数据项，确认后为您展示对应数据。',
-          type: 'data-item-select-dp'
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text === '确认查看本周销售fcst') {
@@ -7192,9 +9359,10 @@ export default function App() {
           type: 'validation-ask'
         };
         setMessages(prev => [...prev, agentMsg]);
-      } else if (text === '需要进行校验' || text === '执行校验') {
+      } else if (text === '需要进行校验' || text === '执行校验' || text === '执行校验-FCST' || text === '执行校验-DP') {
+        const scene: AnomalyScene = text === '执行校验-DP' ? 'DP分析' : text === '执行校验-FCST' ? '销售FCST分析' : validationScene;
         const rules: ValidationRule[] = ANOMALY_RULE_DEFINITIONS
-          .filter(rule => rule.scenes.includes('销售FCST分析') && rule.applicableBUs.includes(buType))
+          .filter(rule => rule.scenes.includes(scene) && rule.applicableBUs.includes(buType))
           .map(rule => ({
             id: rule.id,
             name: rule.name,
@@ -7302,18 +9470,18 @@ export default function App() {
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text === '查看销售目标达成对比') {
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '本周客户FCST及其变化', 
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '销售目标达成对比校验详情如下：',
           type: 'sales-comparison-table'
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text.startsWith('查看') && text.endsWith('详情')) {
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '暂无详细校验数据', 
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '暂无详细校验数据',
           type: 'text'
         };
         setMessages(prev => [...prev, agentMsg]);
@@ -7741,16 +9909,19 @@ export default function App() {
                 '查看客户FCST及其变化',
                 '近期客户FCST异常分析',
                 '查询今日外部信息',
+                '查询异常规则',
+                '查看模拟经营结果',
                 '复盘报告',
-                '查看客户原始fcst',
+                '查看客户FCST管理',
                 'CRM配置',
               ] : [
                 '调整本周销售fcst',
                 '查看客户FCST及其变化',
                 '近期客户FCST异常分析',
                 '查询今日外部信息',
+                '查询异常规则',
                 '复盘报告',
-                '查看客户原始fcst',
+                '查看客户FCST管理',
                 'CRM配置',
               ]).map(item => (
                 <button
@@ -7798,8 +9969,8 @@ export default function App() {
                         onUpdateAttribute={handleUpdateAttribute}
                         onBatchUpdateReasons={handleBatchUpdateReasons}
                         onBatchUpdateValues={handleBatchUpdateValues}
-                        onSubmit={() => processMessage('提交修改')}
-                        onValidate={() => processMessage('执行校验')}
+                        onSubmit={() => { setValidationScene('销售FCST分析'); processMessage('提交修改'); }}
+                        onValidate={() => { setValidationScene('销售FCST分析'); processMessage('执行校验-FCST'); }}
                         onPublish={() => processMessage('发布版本')}
                         filterCustomer={msg.filterCustomer}
                         filterDataItems={msg.filterDataItems}
@@ -7843,11 +10014,6 @@ export default function App() {
                       <DataItemSelectCard onSelect={(items) => processMessage('确认查看本周销售fcst')} />
                     </div>
                   )}
-                  {msg.type === 'data-item-select-dp' && (
-                    <div className="mt-4 w-full overflow-hidden">
-                      <DataItemSelectCard onSelect={(items) => processMessage('确认查看本周DP')} />
-                    </div>
-                  )}
                   {msg.type === 'dp-table' && (
                     <div className="mt-4 w-full min-w-0">
                       <ForecastTable
@@ -7857,8 +10023,8 @@ export default function App() {
                         onUpdateAttribute={handleUpdateAttribute}
                         onBatchUpdateReasons={handleBatchUpdateReasons}
                         onBatchUpdateValues={handleBatchUpdateValues}
-                        onSubmit={() => processMessage('提交修改')}
-                        onValidate={() => processMessage('执行校验')}
+                        onSubmit={() => { setValidationScene('DP分析'); processMessage('提交修改'); }}
+                        onValidate={() => { setValidationScene('DP分析'); processMessage('执行校验-DP'); }}
                         onPublish={() => processMessage('发布版本')}
                         onSimulate={() => processMessage('创建模拟版本')}
                         buType={buType}
@@ -7875,7 +10041,7 @@ export default function App() {
                         onUpdateAttribute={handleUpdateAttribute}
                         onBatchUpdateReasons={handleBatchUpdateReasons}
                         onBatchUpdateValues={handleBatchUpdateValues}
-                        onSubmit={() => processMessage('提交修改')}
+                        onSubmit={() => { setValidationScene('DP分析'); processMessage('提交修改'); }}
                         buType={buType}
                         mode="dp"
                       />
@@ -7890,8 +10056,8 @@ export default function App() {
                         onUpdateAttribute={handleUpdateAttribute}
                         onBatchUpdateReasons={handleBatchUpdateReasons}
                         onBatchUpdateValues={handleBatchUpdateValues}
-                        onSubmit={() => processMessage('提交修改')}
-                        onValidate={() => processMessage('执行校验')}
+                        onSubmit={() => { setValidationScene('销售FCST分析'); processMessage('提交修改'); }}
+                        onValidate={() => { setValidationScene('销售FCST分析'); processMessage('执行校验-FCST'); }}
                         buType={buType}
                         mode="fcst"
                       />
@@ -7991,7 +10157,12 @@ export default function App() {
                   )}
                   {msg.type === 'sales-comparison-table' && (
                     <div className="mt-4 w-full overflow-hidden">
-                      <SalesTargetComparisonTable />
+                      <SalesTargetComparisonTable buType={buType} />
+                    </div>
+                  )}
+                  {msg.type === 'rule-detail-table' && RULE_DETAIL_COMPONENTS[msg.data] && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      {React.createElement(RULE_DETAIL_COMPONENTS[msg.data], { buType: msg.buType! })}
                     </div>
                   )}
                   {msg.type === 'external-info' && (
@@ -8015,9 +10186,6 @@ export default function App() {
                       <div className="flex gap-3 mt-2">
                         <button className="px-6 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95">
                           保存
-                        </button>
-                        <button className="px-6 py-2 bg-white border border-blue-600 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-50 transition-all shadow-sm active:scale-95">
-                          保存并执行
                         </button>
                       </div>
                     </div>
@@ -8144,10 +10312,10 @@ export default function App() {
               查看客户FCST及其变化
             </button>
             <button
-              onClick={() => handleQuickAction('查看客户原始fcst')}
+              onClick={() => handleQuickAction('查看客户FCST管理')}
               className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
             >
-              查看客户原始fcst
+              查看客户FCST管理
             </button>
             <button
               onClick={() => handleQuickAction('解释客户FCST变化识别')}
@@ -8155,7 +10323,15 @@ export default function App() {
             >
               解释客户FCST变化识别
             </button>
-            <button 
+            {(userRole === 'sales-admin' || userRole === 'sales-admin-head') && (
+              <button
+                onClick={() => handleQuickAction('查看模拟经营结果')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+              >
+                查看模拟经营结果
+              </button>
+            )}
+            <button
               onClick={() => handleQuickAction('查询今日外部信息')}
               className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
             >
