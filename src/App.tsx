@@ -438,7 +438,7 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'rule-detail-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'import-confirm' | 'import-result' | 'validation-ask' | 'data-item-select' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
+  type: 'text' | 'table' | 'table-readonly' | 'change-table' | 'rules-table' | 'validation-results' | 'sales-comparison-table' | 'rule-detail-table' | 'external-info' | 'rule-explanation' | 'dp-table' | 'dp-table-readonly' | 'mnt-table' | 'nb-table' | 'simulation-ask' | 'version-select' | 'simulation-loading' | 'simulation-result' | 'sim-version-pick' | 'import-confirm' | 'import-result' | 'validation-ask' | 'data-item-select' | 'retrospective' | 'customer-fcst-raw' | 'forecast-view' | 'crm-page-list';
   data?: any;
   groupingType?: 'customer-size' | 'tech' | 'customer-tech';
   buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
@@ -6120,6 +6120,47 @@ const SimulationVersionSelectView = ({ onConfirm, onNavigateToDP }: { onConfirm:
   );
 };
 
+const SimulationVersionPickView = ({ onSelect }: { onSelect: (version: string) => void }) => {
+  const versions = [
+    { id: 'P260329-04-001', creator: 'lixiaoyan22', date: '2026-03-30 09:12:20' },
+    { id: 'P260329-04-002', creator: 'lixiaoyan22', date: '2026-03-31 14:08:05' },
+    { id: 'P260329-04-003', creator: 'lixiaoyan22', date: '2026-03-15 16:47:38' },
+  ];
+
+  return (
+    <div className="w-full bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="p-4 border-b border-gray-100 bg-gray-50">
+        <h3 className="text-sm font-bold text-gray-800">选择要查看的模拟版本</h3>
+      </div>
+      <table className="w-full border-collapse text-xs">
+        <thead className="bg-gray-100">
+          <tr>
+            <th className="border border-gray-200 p-2 text-center w-10">#</th>
+            <th className="border border-gray-200 p-2 text-left">版本号</th>
+            <th className="border border-gray-200 p-2 text-left">创建人</th>
+            <th className="border border-gray-200 p-2 text-left">创建时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          {versions.map((v, i) => (
+            <tr key={v.id} className="hover:bg-blue-50 transition-colors">
+              <td className="border border-gray-200 p-2 text-center text-gray-400">{i + 1}</td>
+              <td
+                className="border border-gray-200 p-2 font-mono text-blue-600 font-bold cursor-pointer hover:underline"
+                onClick={() => onSelect(v.id)}
+              >
+                {v.id}
+              </td>
+              <td className="border border-gray-200 p-2 text-gray-500">{v.creator}</td>
+              <td className="border border-gray-200 p-2 text-gray-500">{v.date}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 const SimulationLoadingView = () => {
   return (
     <div className="bg-white border border-gray-100 px-4 py-2.5 rounded-2xl shadow-sm inline-flex items-center gap-2">
@@ -9548,6 +9589,14 @@ export default function App() {
             type: 'simulation-result'
           } : m));
         }, 3000);
+      } else if (text === '查看模拟版本列表') {
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: '请选择要查看的模拟版本：',
+          type: 'sim-version-pick'
+        };
+        setMessages(prev => [...prev, agentMsg]);
       } else if (text.startsWith('查看模拟版')) {
         const simVersion = text.replace('查看模拟版', '');
         const initialData = generateInitialData(buType);
@@ -10002,6 +10051,7 @@ export default function App() {
                 '查询今日外部信息',
                 '查询异常规则',
                 '查看模拟经营结果',
+                '查看模拟版本列表',
                 '复盘报告',
                 '查看客户FCST管理',
                 'CRM配置',
@@ -10247,6 +10297,11 @@ export default function App() {
                       <SimulationResultView selectedVersions={msg.simVersions} onCheckVersion={(v) => handleQuickAction(`查看模拟版${v}`)} />
                     </div>
                   )}
+                  {msg.type === 'sim-version-pick' && (
+                    <div className="mt-4 w-full overflow-hidden">
+                      <SimulationVersionPickView onSelect={(v) => handleQuickAction(`查看模拟版${v}`)} />
+                    </div>
+                  )}
                   {msg.type === 'sales-comparison-table' && (
                     <div className="mt-4 w-full overflow-hidden">
                       <SalesTargetComparisonTable buType={buType} />
@@ -10421,6 +10476,14 @@ export default function App() {
                 className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
               >
                 查看模拟经营结果
+              </button>
+            )}
+            {(userRole === 'sales-admin' || userRole === 'sales-admin-head') && (
+              <button
+                onClick={() => handleQuickAction('查看模拟版本列表')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+              >
+                查看模拟版本列表
               </button>
             )}
             <button
