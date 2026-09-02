@@ -344,6 +344,25 @@ const BU_DATA_ITEMS_DP: Record<string, string[]> = {
 
 const BU_DATA_ITEMS = BU_DATA_ITEMS_DP;
 
+// 各模拟版本相较当前版本，在FCSTDP上具体修改了哪些单元格（demo mock，用于"经营结果模拟对比"底部快速入口跳转后的高亮展示）
+const SIMULATION_VERSION_OVERRIDES: Record<string, { model: string; dataItem: string; weekKey: string; value: number }[]> = {
+  'P260329-04-001': [
+    { model: 'ST3151A07-5', dataItem: '客户FCST', weekKey: 'wk35', value: 68000 },
+    { model: 'ST645AD12-1', dataItem: '客户FCST', weekKey: 'wk37', value: 5200 },
+    { model: 'ST4251D02-1', dataItem: '客户FCST', weekKey: 'wk38', value: 12400 },
+  ],
+  'P260329-04-002': [
+    { model: 'ST3151A07-5', dataItem: '客户FCST', weekKey: 'wk37', value: 71500 },
+    { model: 'ST425AD02-7', dataItem: '客户FCST', weekKey: 'wk38', value: 9300 },
+    { model: 'ST746AD09-1', dataItem: '客户FCST', weekKey: 'wk35', value: 15600 },
+  ],
+  'P260329-04-003': [
+    { model: 'ST645AD12-1', dataItem: '客户FCST', weekKey: 'wk35', value: 42800 },
+    { model: 'ST4251D02-1', dataItem: '客户FCST', weekKey: 'wk37', value: 8900 },
+    { model: 'ST3151A07-5', dataItem: '客户FCST', weekKey: 'wk38', value: 61200 },
+  ],
+};
+
 interface ForecastRow {
   id: string;
   customer: string;
@@ -425,6 +444,8 @@ interface Message {
   buType?: 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
   filterCustomer?: string;
   filterDataItems?: string[];
+  simVersions?: string[];
+  simulationVersion?: string;
 }
 
 interface ValidationRule {
@@ -6108,7 +6129,7 @@ const SimulationLoadingView = () => {
   );
 };
 
-const SimulationResultView = ({ onCheckVersion }: { onCheckVersion?: (version: string) => void }) => {
+const SimulationResultView = ({ onCheckVersion, selectedVersions }: { onCheckVersion?: (version: string) => void, selectedVersions?: string[] }) => {
   const [isBPModalOpen, setIsBPModalOpen] = useState(false);
 
   // Data based on user request analysis
@@ -6300,15 +6321,18 @@ const SimulationResultView = ({ onCheckVersion }: { onCheckVersion?: (version: s
         </div>
       </div>
 
-      {onCheckVersion && (
-        <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-start">
-          <button 
-            onClick={() => onCheckVersion('P260329-04-002')}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 shadow-sm rounded-xl text-[13px] font-medium text-[#4a5568] hover:bg-gray-50 transition-all active:scale-95 group"
-          >
-            <RefreshCcw size={16} className="text-[#718096] group-hover:rotate-180 transition-transform duration-500" />
-            查看P260329-04-002
-          </button>
+      {onCheckVersion && selectedVersions && selectedVersions.length > 0 && (
+        <div className="p-4 bg-gray-50 border-t border-gray-100 flex flex-wrap justify-start gap-2">
+          {selectedVersions.map(version => (
+            <button
+              key={version}
+              onClick={() => onCheckVersion(version)}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 shadow-sm rounded-xl text-[13px] font-medium text-[#4a5568] hover:bg-gray-50 transition-all active:scale-95 group"
+            >
+              <RefreshCcw size={16} className="text-[#718096] group-hover:rotate-180 transition-transform duration-500" />
+              查看{version}
+            </button>
+          ))}
         </div>
       )}
 
@@ -6716,7 +6740,8 @@ const ForecastTable = ({
   filterCustomer,
   filterDataItems,
   buType: tableBuType = 'TV',
-  mode = 'fcst'
+  mode = 'fcst',
+  simulationVersion
 }: {
   data: ForecastRow[],
   onUpdate: (rowId: string, key: string, newVal: number, reason?: string, tag?: string) => void,
@@ -6731,7 +6756,8 @@ const ForecastTable = ({
   filterCustomer?: string,
   filterDataItems?: string[],
   buType?: string,
-  mode?: 'fcst' | 'dp'
+  mode?: 'fcst' | 'dp',
+  simulationVersion?: string
 }) => {
   const dataItemsSource = mode === 'dp' ? BU_DATA_ITEMS_DP : BU_DATA_ITEMS_FCST;
   const dataItems = dataItemsSource[tableBuType] || dataItemsSource['TV'];
@@ -7223,6 +7249,17 @@ const ForecastTable = ({
   const keyModels = new Set(['ST3151A07-5', 'ST645AD12-1', 'ST4251D02-1']);
   const anomalyTotalCount = anomalyCells.size;
   const anomalyKeyCount = Array.from(anomalyCells).filter(k => keyModels.has(k.split('_')[0])).length;
+
+  // 模拟版本数据：该版本相较当前版本修改过的单元格 → 覆盖值，用于跳转后黄色底色标记
+  const simOverrideMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (simulationVersion) {
+      (SIMULATION_VERSION_OVERRIDES[simulationVersion] ?? []).forEach(o => {
+        map.set(`${o.model}_${o.dataItem}_${o.weekKey}`, o.value);
+      });
+    }
+    return map;
+  }, [simulationVersion]);
 
   // 时间轴与列结构来自 P260816-22 真实数据
   const weekCols = FCSTDP_TIME;
@@ -7732,10 +7769,14 @@ const ForecastTable = ({
                       const cellKey = row.model ? `${row.model}_${row.dataItem}_${col.key}` : '';
                       const isAnomaly = !groupedRows && anomalyCells.has(cellKey);
                       const isAiRow = row.dataItem === 'AI预测' && val > 0;
+                      const simOverrideVal = !groupedRows ? simOverrideMap.get(cellKey) : undefined;
+                      const isSimOverride = simOverrideVal !== undefined;
+                      const displayVal = isSimOverride ? simOverrideVal : val;
                       return (
                         <td
                           key={col.key}
-                          className={`px-2 py-2 text-right border-r border-gray-200 tabular-nums ${isAnomaly ? 'bg-red-100 text-red-700 font-bold cursor-pointer hover:bg-red-200 transition-colors' : isAiRow ? 'text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors' : `text-gray-700 ${col.highlight ? 'bg-orange-50/50' : ''}`}`}
+                          className={`px-2 py-2 text-right border-r border-gray-200 tabular-nums ${isAnomaly ? 'bg-red-100 text-red-700 font-bold cursor-pointer hover:bg-red-200 transition-colors' : isSimOverride ? 'bg-yellow-200 text-gray-800 font-bold' : isAiRow ? 'text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors' : `text-gray-700 ${col.highlight ? 'bg-orange-50/50' : ''}`}`}
+                          title={isSimOverride ? `模拟版本 ${simulationVersion} 修改：${val} → ${simOverrideVal}` : undefined}
                           onClick={isAnomaly ? () => { setAnomalyModalData({ model: row.model!, dataItem: row.dataItem, week: col.label, value: val }); setAnomalyModalOpen(true); } : isAiRow ? () => { setAiPredictionLoading(true); setAiPredictionModalOpen(true); setTimeout(() => setAiPredictionLoading(false), 3000); } : undefined}
                           onContextMenu={(e) => {
                             e.preventDefault();
@@ -7744,7 +7785,7 @@ const ForecastTable = ({
                             }
                           }}
                         >
-                          {val}
+                          {displayVal}
                         </td>
                       );
                     })}
@@ -9489,12 +9530,14 @@ export default function App() {
         setMessages(prev => [...prev, agentMsg]);
       } else if (text.startsWith('对比版本:')) {
         // 后端模拟经营计算约需 1 分钟，先展示 loading 状态，计算完成后再替换为结果
+        const compareVersions = text.replace('对比版本:', '').split(',').map(s => s.trim()).filter(Boolean);
         const loadingId = (Date.now() + 1).toString();
         const loadingMsg: Message = {
           id: loadingId,
           role: 'agent',
           content: '正在进行模拟经营计算，预计需要约 1 分钟，请稍候…',
-          type: 'simulation-loading'
+          type: 'simulation-loading',
+          simVersions: compareVersions
         };
         setMessages(prev => [...prev, loadingMsg]);
         // 模拟后端执行耗时（真实环境约 1 分钟，此处 demo 缩短为约 3 秒），完成后将 loading 替换为结果
@@ -9505,14 +9548,16 @@ export default function App() {
             type: 'simulation-result'
           } : m));
         }, 3000);
-      } else if (text === '查看模拟版P260329-04-002') {
+      } else if (text.startsWith('查看模拟版')) {
+        const simVersion = text.replace('查看模拟版', '');
         const initialData = generateInitialData(buType);
-        const agentMsg: Message = { 
-          id: (Date.now() + 1).toString(), 
-          role: 'agent', 
-          content: '好的，为您进入模拟版 P260329-04-002 的本周DP页面。在此视图下，您可以根据预测建议手动调整销售FCST及需求计划。点击尺寸旁的箭头可展开至具体 Model 维度级别进行微调。', 
+        const agentMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'agent',
+          content: `好的，这是模拟版本 ${simVersion} 的数据，已为您进入本周DP页面。该模拟版本相较当前版本修改过的单元格已用黄色底色标记，点击尺寸旁的箭头可展开至具体 Model 维度级别查看。`,
           type: 'dp-table',
-          data: initialData
+          data: initialData,
+          simulationVersion: simVersion
         };
         setMessages(prev => [...prev, agentMsg]);
       } else if (text === '查看销售目标达成对比') {
@@ -10075,6 +10120,7 @@ export default function App() {
                         onSimulate={() => processMessage('创建模拟版本')}
                         buType={buType}
                         mode="dp"
+                        simulationVersion={msg.simulationVersion}
                       />
                     </div>
                   )}
@@ -10198,7 +10244,7 @@ export default function App() {
                   )}
                   {msg.type === 'simulation-result' && (
                     <div className="mt-4 w-full overflow-hidden">
-                      <SimulationResultView onCheckVersion={(v) => handleQuickAction(`查看模拟版${v}`)} />
+                      <SimulationResultView selectedVersions={msg.simVersions} onCheckVersion={(v) => handleQuickAction(`查看模拟版${v}`)} />
                     </div>
                   )}
                   {msg.type === 'sales-comparison-table' && (
