@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Send, User, Bot, Edit2, Check, X, AlertCircle, ChevronRight, ChevronDown, Loader2, BarChart3, Target, Tag, Plus, Eye, EyeOff, Activity, ArrowUpRight, ArrowDownRight, Crown, Download, Upload, Search, Settings, Filter, RefreshCcw, RefreshCw, Layers, ExternalLink, MessageSquare, Clock, PanelLeftClose, PanelLeftOpen, MoreHorizontal, PlusCircle } from 'lucide-react';
+import { Send, User, Bot, Edit2, Check, X, AlertCircle, AlertTriangle, ChevronRight, ChevronDown, Loader2, BarChart3, Target, Tag, Plus, Eye, EyeOff, Activity, ArrowUpRight, ArrowDownRight, Crown, Download, Upload, Search, Settings, Filter, RefreshCcw, RefreshCw, Layers, ExternalLink, MessageSquare, Clock, PanelLeftClose, PanelLeftOpen, MoreHorizontal, PlusCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIPredictionTooltip } from './components/tooltips/AIPredictionTooltip';
 import { generateAnomalyReasoning } from './services/llm-service';
@@ -344,6 +344,16 @@ const BU_DATA_ITEMS_DP: Record<string, string[]> = {
 
 const BU_DATA_ITEMS = BU_DATA_ITEMS_DP;
 
+// 各BU在"本周销售预测"/"本周DP"表中，允许用户双击编辑的数据项白名单
+const EDITABLE_DATA_ITEMS: Record<string, { fcst: string[]; dp: string[] }> = {
+  'TV': { fcst: ['销售FCST(ETD)'], dp: ['需求计划', 'Extra（Supply外）'] },
+  'CID': { fcst: ['销售FCST(ETD)'], dp: ['需求计划', 'Extra（Supply外）'] },
+  'MNT': { fcst: ['销量基线预测', '销售策备1-中低风险', '销售策备2-高风险', '周转库存', '策备库存'], dp: ['需求计划'] },
+  'NB': { fcst: ['销量基线预测', '销售策备1-中低风险', '销售策备2-高风险', '周转库存', '策备库存'], dp: ['需求计划'] },
+  '车载': { fcst: ['销量基线预测', '销售策备1-中低风险', '销售策备2-高风险', '库存目标', '策备库存'], dp: ['需求计划'] },
+  'MC': { fcst: ['销量基线预测', '销售策备1-中低风险', '销售策备2-高风险', '库存目标'], dp: ['需求计划'] },
+};
+
 // 各模拟版本相较当前版本，在FCSTDP上具体修改了哪些单元格（demo mock，用于"经营结果模拟对比"底部快速入口跳转后的高亮展示）
 const SIMULATION_VERSION_OVERRIDES: Record<string, { model: string; dataItem: string; weekKey: string; value: number }[]> = {
   'P260329-04-001': [
@@ -456,7 +466,7 @@ interface ValidationRule {
 }
 
 type AnomalyBU = 'TV' | 'CID' | 'MNT' | 'NB' | '车载' | 'MC';
-type AnomalyScene = '客户FCST分析' | '销售FCST分析' | 'DP分析';
+type AnomalyScene = '客户FCST分析' | '销售FCST分析' | 'DP分析' | '预测复盘';
 
 interface ThresholdInput {
   id: string;
@@ -513,6 +523,7 @@ interface DrawerEditState {
   bu: AnomalyBU | null;
   dimension: string | null;
   timeGranularity: string | null;
+  isEditable: boolean;
 }
 
 interface ExternalInfo {
@@ -734,18 +745,33 @@ const ANOMALY_RULE_DEFINITIONS: AnomalyRuleDefinition[] = [
   {
     id: 'shipment-form', name: '出货形态分析', applicableBUs: ['MNT', 'NB', '车载'],
     dimTV: '出货形态', dimIT: '出货形态', dimMC: '出货形态',
-    timeGranularity: '年+半年+月', parameterSummary: '占比偏离目标值',
+    timeGranularity: '年+半年+月', parameterSummary: '各形态占比低于下限或高于上限',
     scenes: ['销售FCST分析', 'DP分析'],
     drawerConfig: {
       ruleKey: 'shipment-form', title: '出货形态分析',
-      thresholds: [{
-        title: '各出货形态目标占比', required: true, hint: '实际占比偏离BP目标时触发预警',
-        inputs: [
-          { id: 'ship-oc', label: 'OC 目标占比', prefix: '>', suffix: '%', defaultValue: 40 },
-          { id: 'ship-lcm', label: 'LCM 目标占比', prefix: '>', suffix: '%', defaultValue: 35 },
-          { id: 'ship-tpm', label: 'TPM 目标占比', prefix: '>', suffix: '%', defaultValue: 25 },
-        ]
-      }]
+      thresholds: [
+        {
+          title: 'S:OpenCell成品料号占比阈值', required: true, hint: '实际占比低于下限或高于上限时触发预警（OR关系）',
+          inputs: [
+            { id: 'ship-oc-lower', label: '占比下限', prefix: '≤', suffix: '%', defaultValue: 30 },
+            { id: 'ship-oc-upper', label: '占比上限', prefix: '≥', suffix: '%', defaultValue: 50 },
+          ]
+        },
+        {
+          title: 'M:Module成品料号占比阈值', required: true, hint: '实际占比低于下限或高于上限时触发预警（OR关系）',
+          inputs: [
+            { id: 'ship-lcm-lower', label: '占比下限', prefix: '≤', suffix: '%', defaultValue: 25 },
+            { id: 'ship-lcm-upper', label: '占比上限', prefix: '≥', suffix: '%', defaultValue: 45 },
+          ]
+        },
+        {
+          title: 'C:Cell成品料号占比阈值', required: true, hint: '实际占比低于下限或高于上限时触发预警（OR关系）',
+          inputs: [
+            { id: 'ship-tpm-lower', label: '占比下限', prefix: '≤', suffix: '%', defaultValue: 15 },
+            { id: 'ship-tpm-upper', label: '占比上限', prefix: '≥', suffix: '%', defaultValue: 35 },
+          ]
+        }
+      ]
     }
   },
   {
@@ -769,6 +795,40 @@ const ANOMALY_RULE_DEFINITIONS: AnomalyRuleDefinition[] = [
     drawerConfig: {
       ruleKey: 'material-auth', title: '物料授权情况检查',
       fixedRules: ['逐月累加客户FCST，当累加值超过剩余可用授权量时，从该月起触发预警并标红（此规则不可修改）'],
+    }
+  },
+  {
+    id: 'ml-accuracy-bias', name: 'ML预测准确率&偏差', applicableBUs: BU_ALL,
+    dimTV: 'Model+客户+应用别', dimIT: 'Model+客户+应用别', dimMC: 'Model+客户+应用别',
+    timeGranularity: '月', parameterSummary: '准确率≤70%且偏差≥±30%',
+    scenes: ['预测复盘'],
+    drawerConfig: {
+      ruleKey: 'ml-accuracy-bias', title: 'ML预测准确率&偏差',
+      thresholds: [{
+        title: '预测准确率与偏差触发条件', required: true,
+        preHint: '需同时满足以下两个条件才触发预警（AND关系）',
+        conditions: [
+          { title: '条件1：预测准确率', inputs: [{ id: 'mab-acc', label: '准确率上限', prefix: '≤', suffix: '%', defaultValue: 70 }] },
+          { title: '条件2：预测偏差度', inputs: [{ id: 'mab-bias', label: '偏差度', prefix: '≥ ±', suffix: '%', defaultValue: 30 }] },
+        ]
+      }]
+    }
+  },
+  {
+    id: 'sales-accuracy-bias', name: '销售预测准确率&偏差', applicableBUs: BU_ALL,
+    dimTV: 'Model+客户+应用别', dimIT: 'Model+客户+应用别', dimMC: 'Model+客户+应用别',
+    timeGranularity: '月', parameterSummary: '准确率≤70%且偏差≥±30%',
+    scenes: ['预测复盘'],
+    drawerConfig: {
+      ruleKey: 'sales-accuracy-bias', title: '销售预测准确率&偏差',
+      thresholds: [{
+        title: '预测准确率与偏差触发条件', required: true,
+        preHint: '需同时满足以下两个条件才触发预警（AND关系）',
+        conditions: [
+          { title: '条件1：预测准确率', inputs: [{ id: 'sab-acc', label: '准确率上限', prefix: '≤', suffix: '%', defaultValue: 70 }] },
+          { title: '条件2：预测偏差度', inputs: [{ id: 'sab-bias', label: '偏差度', prefix: '≥ ±', suffix: '%', defaultValue: 30 }] },
+        ]
+      }]
     }
   },
 ];
@@ -4886,7 +4946,7 @@ const KeyProductAchievementTable = ({ buType }: { buType: AnomalyBU }) => {
   const renderValue = (key: string, val: number) => (
     <td key={key} className="border border-gray-200 p-2 text-center text-gray-900 font-medium">{val}</td>
   );
-  const renderRate = (key: string, actualSum: number, targetSum: number) => {
+  const renderRate = (key: string, actualSum: number, targetSum: number, showGap: boolean = true) => {
     const rate = targetSum === 0 ? 100 : Math.round((actualSum / targetSum) * 100);
     const gap = actualSum - targetSum;
     const over = rate <= RATE_TH;
@@ -4894,7 +4954,7 @@ const KeyProductAchievementTable = ({ buType }: { buType: AnomalyBU }) => {
       <td key={key} className={`border border-gray-200 p-2 text-center ${over ? 'bg-red-50' : ''}`}>
         <div className="flex flex-col items-center justify-center">
           <span className={`font-bold ${over ? 'text-red-600' : 'text-gray-900'}`}>{rate}%</span>
-          <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}</span>
+          {showGap && <span className={`text-[10px] font-bold ${over ? 'text-red-500' : 'text-gray-400'}`}>{gap > 0 ? `+${gap}` : gap}</span>}
         </div>
       </td>
     );
@@ -4972,19 +5032,19 @@ const KeyProductAchievementTable = ({ buType }: { buType: AnomalyBU }) => {
                 </tr>
                 <tr className="hover:bg-gray-50 transition-colors">
                   {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(出货+FCST)</td>}
-                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsf-${i}`, sumByIndexes(group.shipFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsf-${i}`, sumByIndexes(group.shipFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes), false))}
                 </tr>
                 <tr className="hover:bg-gray-50 transition-colors">
                   {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(出货+DP)</td>}
-                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsd-${i}`, sumByIndexes(group.shipDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rsd-${i}`, sumByIndexes(group.shipDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes), false))}
                 </tr>
                 <tr className="hover:bg-gray-50 transition-colors">
                   {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(营收+FCST)</td>}
-                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrf-${i}`, sumByIndexes(group.revFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrf-${i}`, sumByIndexes(group.revFcst, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes), false))}
                 </tr>
                 <tr className="hover:bg-gray-50 transition-colors">
                   {visibleColumns.has('dataItem') && <td className="border border-gray-200 p-2 font-bold text-blue-700 leading-tight">达成率(营收+DP)</td>}
-                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrd-${i}`, sumByIndexes(group.revDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes)))}
+                  {visiblePeriodIndexes.map(({ h, i }) => renderRate(`rrd-${i}`, sumByIndexes(group.revDp, h.monthIndexes), sumByIndexes(group.kpi, h.monthIndexes), false))}
                 </tr>
               </React.Fragment>
             )) : groupedData.map((group, gIdx) => (
@@ -6826,6 +6886,29 @@ const ForecastTable = ({
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [itemsToValidate, setItemsToValidate] = useState<{ rowId: string; key: string; oldVal: number; newVal: number; customer: string; size: string; model?: string; item: string }[]>([]);
 
+  // ===== 单元格编辑（本周销售预测 / 本周DP 白名单数据项，双击编辑 → 未保存黄色 → 点击保存后红色角标）=====
+  const [cellEdits, setCellEdits] = useState<Map<string, { original: number; current: number; saved: boolean }>>(new Map());
+  const [editingCell, setEditingCell] = useState<{ key: string; original: number; draft: string } | null>(null);
+  const [saveToast, setSaveToast] = useState(false);
+  const commitEditingCell = () => {
+    if (!editingCell) return;
+    const { key, original, draft } = editingCell;
+    const parsed = Number(draft);
+    if (!isNaN(parsed)) {
+      setCellEdits(prev => {
+        const next = new Map<string, { original: number; current: number; saved: boolean }>(prev);
+        if (parsed === original) {
+          const existing = next.get(key);
+          if (!existing?.saved) next.delete(key);
+        } else {
+          next.set(key, { original, current: parsed, saved: false });
+        }
+        return next;
+      });
+    }
+    setEditingCell(null);
+  };
+
   const EXTEND_FIELD_OPTIONS = ['版本号', 'SBU', 'BU', '技术别', '应用领域', 'Model Name', '尺寸', '机种名称', 'VRR', 'DLG', '刷新率', '分辨率', '对外版次', 'Product ID', 'LGModel', 'LGProductId', '面板产地', '交付地点', '发货地点', '模组厂', '出货形态', 'Touch形态', '长宽比', 'Model Name工作状态', '前Sub-model', 'EOP计划时间', 'EOP实际时间', '集团号', '客户名称', 'approval时间-计划年月', 'approval时间-实际年月', 'CB料号', '销售处', '搭配比例', '客户简称', '需求类型', '客户分类', '客户等级', '销售组'];
   const DEFAULT_FIELDS = new Set(['版本号', 'Model Name', '对外版次', '尺寸', '集团号', '客户名称']);
   // 只有这 6 个字段在 mock 数据（FCSTDP_MODELS）里有真实值，其余字段仅作展示、不可勾选
@@ -6972,9 +7055,21 @@ const ForecastTable = ({
   }, []);
 
   const handleSubmitClick = () => {
+    // 落定本单元格编辑功能：把所有未保存的单元格改为已保存（黄色→红色角标），并弹出保存成功提示
+    const hasPendingCellEdits = Array.from(cellEdits.values()).some((e: { original: number; current: number; saved: boolean }) => !e.saved);
+    if (hasPendingCellEdits) {
+      setCellEdits(prev => {
+        const next = new Map<string, { original: number; current: number; saved: boolean }>(prev);
+        next.forEach((v, k) => { if (!v.saved) next.set(k, { ...v, saved: true }); });
+        return next;
+      });
+      setSaveToast(true);
+      setTimeout(() => setSaveToast(false), 2500);
+    }
+
     // 1. Identify all changes
     const changes: { rowId: string; key: string; oldVal: number; newVal: number; customer: string; size: string; model?: string; item: string }[] = [];
-    
+
     data.forEach(row => {
       if (!row.prevValues) return;
       Object.keys(row.values).forEach(key => {
@@ -7792,7 +7887,7 @@ const ForecastTable = ({
                   {mergeMode && isFirstOfModel && baseColumnFields.map(field => (
                     <td key={field} rowSpan={modelRowCount} className="px-3 py-2 text-gray-700 border-r border-gray-200 align-middle whitespace-nowrap">{getBaseCellValue(row, field) || '　'}</td>
                   ))}
-                  <td className={`px-3 py-2 border-r border-gray-200 font-medium ${row.dataItem === '销售FCST(ETD)' ? 'text-orange-500' : 'text-gray-800'}`}>
+                  <td className={`px-3 py-2 border-r border-gray-200 font-medium ${!groupedRows && !simulationVersion && !!row.model && (EDITABLE_DATA_ITEMS[tableBuType]?.[mode === 'dp' ? 'dp' : 'fcst'] ?? []).includes(row.dataItem) ? 'text-orange-500' : 'text-gray-800'}`}>
                     {row.dataItem}
                   </td>
                   {isQuarterView
@@ -7812,13 +7907,18 @@ const ForecastTable = ({
                       const isAiRow = row.dataItem === 'AI预测' && val > 0;
                       const simOverrideVal = !groupedRows ? simOverrideMap.get(cellKey) : undefined;
                       const isSimOverride = simOverrideVal !== undefined;
-                      const displayVal = isSimOverride ? simOverrideVal : val;
+                      const editEntry = !groupedRows ? cellEdits.get(cellKey) : undefined;
+                      const isEditingThis = editingCell?.key === cellKey;
+                      const isEditableHere = !groupedRows && !isQuarterView && !simulationVersion && !!row.model && !col.isMonthTotal
+                        && (EDITABLE_DATA_ITEMS[tableBuType]?.[mode === 'dp' ? 'dp' : 'fcst'] ?? []).includes(row.dataItem);
+                      const displayVal = isSimOverride ? simOverrideVal : (editEntry ? editEntry.current : val);
                       return (
                         <td
                           key={col.key}
-                          className={`px-2 py-2 text-right border-r border-gray-200 tabular-nums ${isAnomaly ? 'bg-red-100 text-red-700 font-bold cursor-pointer hover:bg-red-200 transition-colors' : isSimOverride ? 'bg-yellow-200 text-gray-800 font-bold' : isAiRow ? 'text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors' : `text-gray-700 ${col.highlight ? 'bg-orange-50/50' : ''}`}`}
+                          className={`relative px-2 py-2 text-right border-r border-gray-200 tabular-nums group/cell ${isAnomaly ? 'bg-red-100 text-red-700 font-bold cursor-pointer hover:bg-red-200 transition-colors' : editEntry && !editEntry.saved ? 'bg-yellow-200 text-gray-900 font-bold' : isSimOverride ? 'bg-yellow-200 text-gray-800 font-bold' : isAiRow ? 'bg-gray-100 text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors' : col.highlight ? 'text-gray-700 bg-orange-50/50' : isEditableHere ? 'bg-white text-gray-700' : 'bg-gray-100 text-gray-700'} ${isEditableHere && !isEditingThis ? 'cursor-text hover:ring-1 hover:ring-inset hover:ring-blue-300' : ''}`}
                           title={isSimOverride ? `模拟版本 ${simulationVersion} 修改：${val} → ${simOverrideVal}` : undefined}
                           onClick={isAnomaly ? () => { setAnomalyModalData({ model: row.model!, dataItem: row.dataItem, week: col.label, value: val }); setAnomalyModalOpen(true); } : isAiRow ? () => { setAiPredictionLoading(true); setAiPredictionModalOpen(true); setTimeout(() => setAiPredictionLoading(false), 3000); } : undefined}
+                          onDoubleClick={isEditableHere ? (e) => { e.stopPropagation(); setEditingCell({ key: cellKey, original: editEntry ? editEntry.original : val, draft: String(displayVal) }); } : undefined}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             if (!groupedRows && row.dataItem === '销售FCST(ETD)') {
@@ -7826,7 +7926,41 @@ const ForecastTable = ({
                             }
                           }}
                         >
-                          {displayVal}
+                          {isEditingThis ? (
+                            <input
+                              autoFocus
+                              type="number"
+                              className="w-16 px-1 py-0.5 text-xs text-right border border-blue-500 rounded focus:outline-none bg-white text-gray-900"
+                              value={editingCell!.draft}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => setEditingCell(prev => prev ? { ...prev, draft: e.target.value } : prev)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') commitEditingCell();
+                                if (e.key === 'Escape') setEditingCell(null);
+                              }}
+                              onBlur={commitEditingCell}
+                            />
+                          ) : displayVal}
+
+                          {editEntry?.saved && (
+                            <div className="absolute top-0 left-0 w-0 h-0 border-t-[8px] border-t-red-500 border-r-[8px] border-r-transparent" />
+                          )}
+
+                          {editEntry && !isEditingThis && (
+                            <div className="hidden group-hover/cell:flex absolute z-[200] bottom-full left-1/2 -translate-x-1/2 mb-2 flex-col gap-1 bg-gray-900 text-white text-[11px] rounded-lg shadow-xl px-3 py-2 whitespace-nowrap pointer-events-none">
+                              {!editEntry.saved && (
+                                <div className="flex items-center gap-1 text-amber-400 font-bold">
+                                  <AlertTriangle size={11} /> 未保存
+                                </div>
+                              )}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-red-400 line-through">{editEntry.original}</span>
+                                <ArrowUpRight size={10} className="text-gray-400" />
+                                <span className="text-green-400 font-bold">{editEntry.current}</span>
+                              </div>
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-t-[6px] border-t-gray-900 border-x-[6px] border-x-transparent" />
+                            </div>
+                          )}
                         </td>
                       );
                     })}
@@ -7877,6 +8011,14 @@ const ForecastTable = ({
           </button>
         </div>
       </div>
+
+      {saveToast && createPortal(
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100000] bg-gray-900 text-white text-sm px-4 py-2.5 rounded-full shadow-xl flex items-center gap-2">
+          <Check size={16} className="text-green-400" />
+          修改已保存
+        </div>,
+        document.body
+      )}
 
       <BatchReasonModal
         isOpen={isBatchModalOpen}
@@ -8477,7 +8619,7 @@ const ForecastTable = ({
   );
 };
 
-const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: AnomalyRuleRow[], onToggle: (rowId: string) => void, onEdit: (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => void, defaultBU?: string }) => {
+const AnomalyRulesTable = ({ rows, onToggle, onEdit, onView, defaultBU }: { rows: AnomalyRuleRow[], onToggle: (rowId: string) => void, onEdit: (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => void, onView: (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => void, defaultBU?: string }) => {
   const [filterBU, setFilterBU] = useState<string>(defaultBU || '');
   const [filterScene, setFilterScene] = useState<string>('');
 
@@ -8505,6 +8647,7 @@ const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: Anomal
           <option value="客户FCST分析">客户FCST分析</option>
           <option value="销售FCST分析">销售FCST分析</option>
           <option value="DP分析">DP分析</option>
+          <option value="预测复盘">预测复盘</option>
         </select>
         <span className="text-[11px] text-gray-400">显示 {filteredRows.length} / {rows.length} 条</span>
       </div>
@@ -8519,7 +8662,7 @@ const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: Anomal
               <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:140}}>场景</th>
               <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:130}}>规则特有参数</th>
               <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:70}}>适用BU</th>
-              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:50}}>操作</th>
+              <th className="p-2.5 text-left font-semibold text-gray-500 whitespace-nowrap border-b border-gray-100" style={{width:90}}>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -8551,7 +8694,10 @@ const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: Anomal
                     <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${buStyle.bg} ${buStyle.text}`}>{row.bu}</span>
                   </td>
                   <td className="p-2.5 border-b border-gray-50">
-                    <button onClick={() => onEdit(row.ruleId, row.bu, row.dimension, row.timeGranularity)} className="text-blue-600 hover:text-blue-500 font-medium text-xs">修改</button>
+                    <div className="flex items-center gap-2.5">
+                      <button onClick={() => onView(row.ruleId, row.bu, row.dimension, row.timeGranularity)} className="text-blue-600 hover:text-blue-500 font-medium text-xs">详情</button>
+                      <button onClick={() => onEdit(row.ruleId, row.bu, row.dimension, row.timeGranularity)} className="text-blue-600 hover:text-blue-500 font-medium text-xs">修改</button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -8563,8 +8709,8 @@ const AnomalyRulesTable = ({ rows, onToggle, onEdit, defaultBU }: { rows: Anomal
   );
 };
 
-const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, onClose, onSave }: {
-  isOpen: boolean; ruleId: string | null; bu: AnomalyBU | null; dimension: string | null; timeGranularity: string | null;
+const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, isEditable = true, onClose, onSave }: {
+  isOpen: boolean; ruleId: string | null; bu: AnomalyBU | null; dimension: string | null; timeGranularity: string | null; isEditable?: boolean;
   onClose: () => void; onSave: (ruleId: string, values: Record<string, number>) => void;
 }) => {
   const [thresholdValues, setThresholdValues] = useState<Record<string, number>>({});
@@ -8587,14 +8733,15 @@ const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, onClos
 
   const renderThresholdRow = (input: ThresholdInput) => (
     <div key={input.id} className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
-      <span className="text-[13px] text-gray-700 w-[120px] shrink-0 font-medium">{input.label}</span>
+      <span className="text-[13px] text-gray-700 w-[200px] shrink-0 font-medium">{input.label}</span>
       <div className="flex items-center gap-1.5">
         <span className="text-[13px] text-gray-500">{input.prefix}</span>
         <input
           type="number"
           value={thresholdValues[input.id] ?? input.defaultValue}
           onChange={e => setThresholdValues(prev => ({ ...prev, [input.id]: Number(e.target.value) }))}
-          className="w-[80px] h-9 border border-gray-200 rounded-md px-3 text-sm text-center outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all"
+          disabled={!isEditable}
+          className={`w-[80px] h-9 border rounded-md px-3 text-sm text-center outline-none transition-all ${isEditable ? 'border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10' : 'border-gray-100 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
         />
         <span className="text-[13px] text-gray-500">{input.suffix}</span>
       </div>
@@ -8647,7 +8794,11 @@ const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, onClos
               <div>
                 <div className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
                   阈值配置
-                  <span className="text-[11px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium">可修改</span>
+                  {isEditable ? (
+                    <span className="text-[11px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium">可修改</span>
+                  ) : (
+                    <span className="text-[11px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded font-medium">只读</span>
+                  )}
                 </div>
                 {drawerConfig.thresholds.map((group, gi) => (
                   <div key={gi} className="mb-5">
@@ -8674,8 +8825,14 @@ const RuleEditDrawer = ({ isOpen, ruleId, bu, dimension, timeGranularity, onClos
         </div>
 
         <div className="px-7 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
-          <button onClick={onClose} className="h-9 px-5 rounded-md text-sm text-gray-600 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 transition-all">取消</button>
-          <button onClick={() => { if (ruleId) onSave(ruleId, thresholdValues); }} className="h-9 px-5 rounded-md text-sm text-white bg-blue-600 hover:bg-blue-700 transition-all font-medium">保存</button>
+          {isEditable ? (
+            <>
+              <button onClick={onClose} className="h-9 px-5 rounded-md text-sm text-gray-600 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 transition-all">取消</button>
+              <button onClick={() => { if (ruleId) onSave(ruleId, thresholdValues); }} className="h-9 px-5 rounded-md text-sm text-white bg-blue-600 hover:bg-blue-700 transition-all font-medium">保存</button>
+            </>
+          ) : (
+            <button onClick={onClose} className="h-9 px-5 rounded-md text-sm text-white bg-blue-600 hover:bg-blue-700 transition-all font-medium">关闭</button>
+          )}
         </div>
       </motion.div>
     </>
@@ -9189,7 +9346,7 @@ export default function App() {
   const [forecastData, setForecastData] = useState<ForecastRow[]>([]);
   const [backupForecastData, setBackupForecastData] = useState<ForecastRow[] | null>(null);
   const [anomalyRuleRows, setAnomalyRuleRows] = useState<AnomalyRuleRow[]>([]);
-  const [drawerState, setDrawerState] = useState<DrawerEditState>({ isOpen: false, ruleId: null, bu: null, dimension: null, timeGranularity: null });
+  const [drawerState, setDrawerState] = useState<DrawerEditState>({ isOpen: false, ruleId: null, bu: null, dimension: null, timeGranularity: null, isEditable: true });
   const [savedThresholds, setSavedThresholds] = useState<Record<string, Record<string, number>>>({});
   const [crmModal, setCrmModal] = useState<{ title: string; image: string } | null>(null);
   const [showHomepage, setShowHomepage] = useState(true);
@@ -9216,7 +9373,11 @@ export default function App() {
   };
 
   const handleEditRule = (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => {
-    setDrawerState({ isOpen: true, ruleId, bu, dimension, timeGranularity: time });
+    setDrawerState({ isOpen: true, ruleId, bu, dimension, timeGranularity: time, isEditable: true });
+  };
+
+  const handleViewRule = (ruleId: string, bu: AnomalyBU, dimension: string, time: string) => {
+    setDrawerState({ isOpen: true, ruleId, bu, dimension, timeGranularity: time, isEditable: false });
   };
 
   const handleSaveDrawer = (ruleId: string, values: Record<string, number>) => {
@@ -9603,7 +9764,7 @@ export default function App() {
         const agentMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'agent',
-          content: `好的，这是模拟版本 ${simVersion} 的数据，已为您进入本周DP页面。该模拟版本相较当前版本修改过的单元格已用黄色底色标记，点击尺寸旁的箭头可展开至具体 Model 维度级别查看。`,
+          content: `好的，这是模拟版本 ${simVersion} 的数据，已为您进入本周DP页面。`,
           type: 'dp-table',
           data: initialData,
           simulationVersion: simVersion
@@ -10328,6 +10489,7 @@ export default function App() {
                         rows={anomalyRuleRows.length > 0 ? anomalyRuleRows : msg.data}
                         onToggle={handleToggleRule}
                         onEdit={handleEditRule}
+                        onView={handleViewRule}
                         defaultBU={buType}
                       />
                       <div className="flex gap-3 mt-2">
@@ -10395,6 +10557,7 @@ export default function App() {
             bu={drawerState.bu}
             dimension={drawerState.dimension}
             timeGranularity={drawerState.timeGranularity}
+            isEditable={drawerState.isEditable}
             onClose={handleCloseDrawer}
             onSave={handleSaveDrawer}
           />
