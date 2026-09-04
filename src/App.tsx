@@ -10206,24 +10206,24 @@ export default function App() {
             </div>
             <div className="flex flex-col gap-1">
               {((userRole === 'sales-admin' || userRole === 'sales-admin-head') ? [
-                '查看并调整DP',
-                '查看客户FCST及其变化',
-                '近期客户FCST异常分析',
-                '查询今日外部信息',
-                '查询异常规则',
-                '查看模拟经营结果',
-                '查看模拟版本列表',
-                '复盘报告',
                 '查看客户FCST管理',
+                '查看客户FCST及其变化',
+                '查看并调整DP',
+                '查看模拟版本列表',
+                '查看模拟经营结果',
+                '查询今日外部信息',
+                '复盘报告',
+                '近期客户FCST异常分析',
+                '查询异常规则',
                 'CRM配置',
               ] : [
-                '调整本周销售fcst',
-                '查看客户FCST及其变化',
-                '近期客户FCST异常分析',
-                '查询今日外部信息',
-                '查询异常规则',
-                '复盘报告',
                 '查看客户FCST管理',
+                '查看客户FCST及其变化',
+                '调整本周销售fcst',
+                '查询今日外部信息',
+                '复盘报告',
+                '近期客户FCST异常分析',
+                '查询异常规则',
                 'CRM配置',
               ]).map(item => (
                 <button
@@ -10583,6 +10583,18 @@ export default function App() {
         <div className="max-w-4xl mx-auto">
           {/* Quick Actions */}
           <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
+            <button
+              onClick={() => handleQuickAction('查看客户FCST管理')}
+              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+            >
+              查看客户FCST管理
+            </button>
+            <button
+              onClick={() => handleQuickAction('查看客户FCST及其变化')}
+              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+            >
+              查看客户FCST及其变化
+            </button>
             {userRole === 'sales' && (
               <button
                 onClick={() => handleQuickAction('调整本周销售fcst')}
@@ -10615,38 +10627,20 @@ export default function App() {
                 查看本周DP
               </button>
             )}
-            <button
-              onClick={() => handleQuickAction('查看客户FCST及其变化')}
-              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
-            >
-              查看客户FCST及其变化
-            </button>
-            <button
-              onClick={() => handleQuickAction('查看客户FCST管理')}
-              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
-            >
-              查看客户FCST管理
-            </button>
-            <button
-              onClick={() => handleQuickAction('解释客户FCST变化识别')}
-              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
-            >
-              解释客户FCST变化识别
-            </button>
-            {(userRole === 'sales-admin' || userRole === 'sales-admin-head') && (
-              <button
-                onClick={() => handleQuickAction('查看模拟经营结果')}
-                className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
-              >
-                查看模拟经营结果
-              </button>
-            )}
             {(userRole === 'sales-admin' || userRole === 'sales-admin-head') && (
               <button
                 onClick={() => handleQuickAction('查看模拟版本列表')}
                 className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
               >
                 查看模拟版本列表
+              </button>
+            )}
+            {(userRole === 'sales-admin' || userRole === 'sales-admin-head') && (
+              <button
+                onClick={() => handleQuickAction('查看模拟经营结果')}
+                className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+              >
+                查看模拟经营结果
               </button>
             )}
             <button
@@ -10656,16 +10650,22 @@ export default function App() {
               查询今日外部信息
             </button>
             <button
-              onClick={() => handleQuickAction('查询异常规则')}
-              className="whitespace-nowrap px-3 py-1.5 bg-gray-50 text-gray-600 border border-gray-100 rounded-full text-xs font-medium hover:bg-gray-100 transition-colors shadow-sm"
-            >
-              查询异常规则
-            </button>
-            <button
               onClick={() => handleQuickAction('复盘报告')}
               className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
             >
               预测复盘
+            </button>
+            <button
+              onClick={() => handleQuickAction('解释客户FCST变化识别')}
+              className="whitespace-nowrap px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors shadow-sm"
+            >
+              解释客户FCST变化识别
+            </button>
+            <button
+              onClick={() => handleQuickAction('查询异常规则')}
+              className="whitespace-nowrap px-3 py-1.5 bg-gray-50 text-gray-600 border border-gray-100 rounded-full text-xs font-medium hover:bg-gray-100 transition-colors shadow-sm"
+            >
+              查询异常规则
             </button>
             {/* CRM 配置按钮 */}
             <button
